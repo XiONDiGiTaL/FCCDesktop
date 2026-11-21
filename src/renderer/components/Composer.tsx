@@ -167,7 +167,7 @@ export default function Composer({
               onStop()
             }
           }}
-          placeholder={offline ? 'FCC is offline — start the server in Settings to chat' : 'Message FCC — describe what you want built, fixed or explained…'}
+          placeholder={offline ? 'FCC is offline — follow the setup steps above to connect' : 'Message FCC — describe what you want built, fixed or explained…'}
           rows={1}
           spellCheck
         />
@@ -232,7 +232,7 @@ export default function Composer({
         </span>
         {offline ? (
           <button className="link-btn" onClick={onOpenSettings}>
-            {phase === 'idle' ? 'FCC offline — open connection settings' : 'Connecting…'}
+            {phase === 'idle' ? 'FCC offline — install, start and connect' : 'Connecting…'}
           </button>
         ) : (
           <span className="composer-endpoint">{status?.baseUrl}</span>

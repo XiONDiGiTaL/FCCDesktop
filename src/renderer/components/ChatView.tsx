@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { ConnectionStatus, Conversation, ModelInfo } from '../../shared/types'
 import { folderName, statusLabel } from '../lib/format'
 import MessageItem from './MessageItem'
+import SetupGuide from './SetupGuide'
 import { IconButton, StatusDot } from './ui'
 import { FolderIcon, SparkIcon, XionMark, ArrowUpRightIcon } from './Icons'
 
@@ -114,27 +115,26 @@ export default function ChatView({
                   ? statusLabel(status)
                   : 'Checking FCC connection…'}
             </span>
-            {status?.state !== 'connected' ? (
-              <button className="link-btn" onClick={onOpenSettings}>
-                Configure
-              </button>
-            ) : null}
           </div>
 
-          <div className="suggestion-grid">
-            {SUGGESTIONS.map((suggestion) => (
-              <button key={suggestion.title} className="suggestion" onClick={() => onSuggestion(suggestion.text)}>
-                <span className="suggestion-icon">
-                  <SparkIcon size={17} />
-                </span>
-                <span className="suggestion-body">
-                  <span className="suggestion-title">{suggestion.title}</span>
-                  <span className="suggestion-text">{suggestion.text}</span>
-                </span>
-                <ArrowUpRightIcon size={15} className="suggestion-arrow" />
-              </button>
-            ))}
-          </div>
+          {status?.state === 'connected' ? (
+            <div className="suggestion-grid">
+              {SUGGESTIONS.map((suggestion) => (
+                <button key={suggestion.title} className="suggestion" onClick={() => onSuggestion(suggestion.text)}>
+                  <span className="suggestion-icon">
+                    <SparkIcon size={17} />
+                  </span>
+                  <span className="suggestion-body">
+                    <span className="suggestion-title">{suggestion.title}</span>
+                    <span className="suggestion-text">{suggestion.text}</span>
+                  </span>
+                  <ArrowUpRightIcon size={15} className="suggestion-arrow" />
+                </button>
+              ))}
+            </div>
+          ) : status ? (
+            <SetupGuide status={status} onOpenSettings={onOpenSettings} />
+          ) : null}
 
           <button className="empty-new" onClick={onNew}>
             Start a blank conversation

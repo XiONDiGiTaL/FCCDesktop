@@ -28,6 +28,7 @@ import {
   TextInput,
   Toggle,
 } from './ui'
+import SetupGuide from './SetupGuide'
 import {
   CheckIcon,
   FolderIcon,
@@ -355,6 +356,7 @@ export default function SettingsPanel({
 
           {section === 'connection' ? (
             <>
+              {status && !connected ? <SetupGuide status={status} variant="panel" /> : null}
               <section className="card">
                 <div className="card-head">
                   <div>

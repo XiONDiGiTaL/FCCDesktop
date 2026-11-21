@@ -192,8 +192,8 @@ Download from the [releases page](https://github.com/XiONDiGiTaL/fccGUI/releases
 
 | Artifact | Use |
 | --- | --- |
-| `FCC-Desktop-Setup-1.0.0.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
-| `FCC-Desktop-Portable-1.0.0.exe` | Single portable executable, no install — run it from anywhere. |
+| `FCC-Desktop-Setup-1.0.1.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
+| `FCC-Desktop-Portable-1.0.1.exe` | Single portable executable, no install — run it from anywhere. |
 
 Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on first launch. Click **More info → Run anyway**. The build is reproducible from source with `npm run dist` (see [Building installers](#building-installers)).
 
@@ -205,7 +205,7 @@ Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on f
 4. Pick a model from the composer picker. The catalog is read live from `/v1/models`; if it is empty, press **Refresh** there.
 5. Type a prompt and press <kbd>Enter</kbd>. Tool calls appear as cards you can expand. <kbd>Esc</kbd> stops a turn.
 
-Nothing is sent while the endpoint is unreachable: the composer goes offline and the Connection panel says what to fix instead of failing silently.
+Nothing is sent while the endpoint is unreachable. The offline state — and Settings → Connection — show the three setup steps in the app itself: the FCC install command with a copy button, how to start the server, and where to add a free NVIDIA key in the Admin UI. The connection re-checks every 15 seconds, so the composer unlocks on its own once FCC answers.
 
 ---
 
@@ -359,8 +359,8 @@ npm run dist:dir   # unpacked build only (fast smoke test)
 `electron-builder.yml` targets `nsis` and `portable` for x64, with the XiØN icon from `build/icon.png`. Output:
 
 ```
-release/FCC-Desktop-Setup-1.0.0.exe
-release/FCC-Desktop-Portable-1.0.0.exe
+release/FCC-Desktop-Setup-1.0.1.exe
+release/FCC-Desktop-Portable-1.0.1.exe
 release/win-unpacked/
 ```
 
