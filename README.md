@@ -6,6 +6,8 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 
 ![FCC Desktop overview](docs/screenshots/overview.png)
 
+**[Download the latest build](https://github.com/XiONDiGiTaL/fccGUI/releases/latest)** · [Getting started](#getting-started) · [Build from source](#building-installers)
+
 ---
 
 ## Contents
@@ -13,8 +15,12 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Requirements](#requirements)
-- [Install](#install)
-- [First run](#first-run)
+- [Getting started](#getting-started)
+  - [1. Install Free Claude Code](#1-install-free-claude-code)
+  - [2. Start FCC](#2-start-fcc)
+  - [3. Connect a provider](#3-connect-a-provider)
+  - [4. Install FCC Desktop](#4-install-fcc-desktop)
+  - [5. First conversation](#5-first-conversation)
 - [Connecting to FCC](#connecting-to-fcc)
 - [Models](#models)
 - [Agent permissions](#agent-permissions)
@@ -83,34 +89,107 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 ## Requirements
 
 - Windows 10 or 11, x64.
-- A working Free Claude Code install: `fcc-server` and `fcc-claude` available on PATH (or pointed at in Settings → Connection → Executables).
+- A working Free Claude Code install — `fcc-server` and `fcc-claude` on `PATH`, or paths set in Settings → Connection → Executables. Don't have it? [Step 1](#1-install-free-claude-code) installs it in one command.
 - An FCC server reachable at the configured endpoint. The default install listens on `127.0.0.1:8082`.
+- At least one provider key configured in FCC's Admin UI, otherwise the proxy accepts requests but returns provider errors.
 
 Running the packaged app does **not** require Node.js. Building from source does.
 
 ---
 
-## Install
+## Getting started
 
-Download or build one of:
+Five steps from a bare Windows machine to a working agent. Steps 1–3 set up Free Claude Code itself — FCC Desktop is a client for it and cannot run without it. Step 4 installs this app.
+
+### 1. Install Free Claude Code
+
+Open **PowerShell** (Windows Terminal is fine) and paste this, exactly as written:
+
+```powershell
+& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))
+```
+
+What it does:
+
+- Downloads FCC with `uv` and installs it per-user under `%USERPROFILE%\.fcc`, creating the `fcc-server` and `fcc-claude` commands.
+- Asks which coding agents to set up. Choose **Claude Code** — that is the agent FCC Desktop drives.
+- Offers optional token-optimization add-ons (RTK, Headroom). Either answer is fine; they are not required.
+
+Notes:
+
+- Run it in a normal user session. It does not need an elevated shell.
+- If PowerShell refuses to run the script with an execution-policy error, allow it for that window only:
+
+  ```powershell
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+  ```
+
+  Then run the install command again. To paste it into `cmd.exe` instead:
+
+  ```bat
+  powershell -NoProfile -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1')))"
+  ```
+
+- Close and reopen your terminal afterwards so `PATH` picks up the new commands.
+- Verify:
+
+  ```powershell
+  fcc-server --version
+  fcc-claude --version
+  ```
+
+  Both should print a version. If either says "not recognized", the install did not finish — rerun the command and check the output.
+
+### 2. Start FCC
+
+The installer adds **Free Claude Code** to the Start menu and the desktop. Launch it there, or run:
+
+```powershell
+fcc-server
+```
+
+The server listens on `http://127.0.0.1:8082` and opens the **Admin UI** in your browser. Leave it running — FCC Desktop talks to this process. On Windows the tray icon can reopen Admin, restart or quit the server.
+
+FCC Desktop can also start the server for you (Settings → Connection → *Start FCC automatically*), but only when nothing is already listening.
+
+### 3. Connect a provider
+
+FCC is a proxy, not a model. It needs at least one provider key before any agent can answer.
+
+1. Open the Admin UI — the browser tab the server opened, or tray icon → **Admin**. It is normally `http://127.0.0.1:8082/admin`.
+2. Create a free key at [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
+3. In the Admin UI open **Providers → NVIDIA NIM**, click **Add key**, paste the key, then **Save**.
+4. Leave `MODEL` on the default, or search the model dropdown for another tool-capable model, then click **Apply**.
+5. Optional: enable **Proxy Authentication** to put a bearer token in front of the local proxy. If you do, paste the same token into FCC Desktop under Settings → Connection → *Proxy token* (it is stored encrypted).
+
+NVIDIA NIM is the shortest free path; any of FCC's 61 providers works the same way. Full list and per-provider setup: [FCC → Choose a provider](https://github.com/Alishahryar1/free-claude-code#choose-a-provider).
+
+Confirm the proxy is answering before moving on — this should return JSON containing a model list:
+
+```powershell
+curl.exe http://127.0.0.1:8082/v1/models
+```
+
+### 4. Install FCC Desktop
+
+Download from the [releases page](https://github.com/XiONDiGiTaL/fccGUI/releases/latest):
 
 | Artifact | Use |
 | --- | --- |
-| `FCC-Desktop-Setup-1.0.0.exe` | Per-user installer (NSIS). Choose the install directory, desktop and Start Menu shortcuts. |
-| `FCC-Desktop-Portable-1.0.0.exe` | Single portable executable, no install. |
+| `FCC-Desktop-Setup-1.0.0.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
+| `FCC-Desktop-Portable-1.0.0.exe` | Single portable executable, no install — run it from anywhere. |
 
-Both are unsigned, so Windows SmartScreen may warn on first launch. The build is reproducible with `npm run dist`.
+Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on first launch. Click **More info → Run anyway**. The build is reproducible from source with `npm run dist` (see [Building installers](#building-installers)).
 
----
+### 5. First conversation
 
-## First run
+1. Launch FCC Desktop. The sidebar should read **FCC Connected**, with endpoint, provider and latency.
+2. If it reads **FCC Offline**, the server from step 2 is not answering. Start it, then press **Reload** in Settings → Connection.
+3. Click **Choose workspace** and pick the folder the agent should work in. Without a workspace it runs in the app's data folder, which is rarely what you want.
+4. Pick a model from the composer picker. The catalog is read live from `/v1/models`; if it is empty, press **Refresh** there.
+5. Type a prompt and press <kbd>Enter</kbd>. Tool calls appear as cards you can expand. <kbd>Esc</kbd> stops a turn.
 
-1. Start your FCC server (`fcc-server`), or let the app start it from Settings → Connection.
-2. Launch FCC Desktop. The sidebar shows **FCC Connected** with the endpoint and latency.
-3. Pick a working folder with **Choose workspace** if you want the agent rooted in a project.
-4. Type a prompt and press <kbd>Enter</kbd>.
-
-If nothing answers on the endpoint, the composer switches to an offline state and the Connection panel explains the next step. Nothing is sent until a probe succeeds.
+Nothing is sent while the endpoint is unreachable: the composer goes offline and the Connection panel says what to fix instead of failing silently.
 
 ---
 
