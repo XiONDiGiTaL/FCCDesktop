@@ -1,6 +1,6 @@
 # FCC Desktop
 
-A XiØN desktop environment for [Free Claude Code](https://github.com/Alishahryar1/free-claude-code), the Claude Code agent, wired to a local FCC server, with real file access, live model discovery and persistent conversations.
+A desktop environment for [Free Claude Code](https://github.com/Alishahryar1/free-claude-code), the Claude Code agent, wired to a local FCC server, with real file access, live model discovery and persistent conversations.
 
 Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, React 19 renderer, zero runtime dependencies shipped to the renderer beyond the bundle.
 
