@@ -156,13 +156,29 @@ FCC Desktop can also start the server for you (Settings → Connection → *Star
 
 FCC is a proxy, not a model. It needs at least one provider key before any agent can answer.
 
-1. Open the Admin UI — the browser tab the server opened, or tray icon → **Admin**. It is normally `http://127.0.0.1:8082/admin`.
-2. Create a free key at [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys).
-3. In the Admin UI open **Providers → NVIDIA NIM**, click **Add key**, paste the key, then **Save**.
-4. Leave `MODEL` on the default, or search the model dropdown for another tool-capable model, then click **Apply**.
-5. Optional: enable **Proxy Authentication** to put a bearer token in front of the local proxy. If you do, paste the same token into FCC Desktop under Settings → Connection → *Proxy token* (it is stored encrypted).
+NVIDIA NIM is the shortest free path: hosted endpoints for prototyping, **no credit card and no per-token billing**, limited by rate rather than credits — roughly 40 requests per minute for most models, with your personal limit shown in the top-right of the build.nvidia.com dashboard. That is plenty for an interactive coding agent.
 
-NVIDIA NIM is the shortest free path; any of FCC's 61 providers works the same way. Full list and per-provider setup: [FCC → Choose a provider](https://github.com/Alishahryar1/free-claude-code#choose-a-provider).
+#### Get a free NVIDIA API key
+
+1. Sign in at [build.nvidia.com](https://build.nvidia.com). A free NVIDIA account is enough — signing in enrols you in the NVIDIA Developer Program, which is what grants the free tier.
+2. If prompted, complete account verification. Phone verification is required on many accounts before a key can be generated.
+3. Open [build.nvidia.com/settings/api-keys](https://build.nvidia.com/settings/api-keys), or click your profile avatar (top right) → **API Keys**.
+4. Click **Generate API Key**, give it a recognisable name such as `fcc-desktop`, and confirm. The value starts with `nvapi-`.
+5. Copy the key immediately with **Copy Key** — the full value is shown only once. If you lose it, delete that key and generate a new one.
+
+#### Add the key to FCC
+
+1. Open the **Admin UI** — the browser tab the server opened when it started, or tray icon → **Admin**. It is normally `http://127.0.0.1:8082/admin`, and the exact URL is printed in the server log.
+2. Open **Providers**, find **NVIDIA NIM**, click **Add key**.
+3. Paste the key into the field and click **Save**.
+4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, or search the model dropdown and select another model. For a coding agent, pick one that supports tool calling — larger general-purpose models work; tiny or reasoning-only entries tend to fail on tool use.
+5. Click **Apply** to save your model selection. FCC keeps the provider active from then on and the model becomes available to every connected client, including FCC Desktop.
+
+#### Optional: protect the local proxy
+
+To put a bearer token in front of the proxy, enable **Proxy Authentication** in Admin and set a token there. FCC then requires it on every request; paste the same token into FCC Desktop under Settings → Connection → *Proxy token*, where it is encrypted with the OS keystore (DPAPI). Leave both blank if only you use this machine.
+
+Any of FCC's 61 providers works the same way — the Admin UI drives all of them. Full list and per-provider setup: [FCC → Choose a provider](https://github.com/Alishahryar1/free-claude-code#choose-a-provider).
 
 Confirm the proxy is answering before moving on — this should return JSON containing a model list:
 
@@ -360,6 +376,8 @@ Code signing is not configured; the artifacts are unsigned.
 | `fcc-claude` exits immediately | Usually a shell `PORT` variable. FCC Desktop sets `PORT`/`HOST` for the child, but a manually launched agent in a shell with `PORT=0` will fail. |
 | **Executables: not found** | Install FCC so `fcc-server.exe` and `fcc-claude.exe` are on PATH, or set both paths manually in Settings → Connection → Executables. |
 | Model list is empty | The proxy is up but `/v1/models` failed — often a token mismatch. Set the proxy token, then press Refresh in the picker. |
+| Provider errors (`401`, `403`, `404` on a model) | The NVIDIA key was not saved or not applied. In Admin → Providers → NVIDIA NIM check the key row, hit **Save**, then **Apply** again. Keys are shown only once when generated, so regenerate if the value was lost. |
+| `429` or "rate limit" mid-conversation | The free NVIDIA tier is rate-limited (about 40 requests/minute for most models). Wait a minute, or add a second provider key in Admin and FCC will use the next one. |
 | Agent cannot see a file | The path is outside the workspace and was not attached. Attach it, add its folder under Settings → Agent → additional directories, or switch the workspace. |
 | Stop leaves a turn marked running | The process was killed externally; reopen the conversation — stale streaming messages are normalised to stopped on load. |
 | Blank window in a packaged build | Launch with `--enable-logging` and check `%APPDATA%\FCC Desktop\logs`. A stale `release/` folder is the usual cause; rebuild with `npm run dist`. |
