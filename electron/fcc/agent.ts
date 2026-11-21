@@ -1,0 +1,686 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, statSync } from 'node:fs'
+import { dirname, isAbsolute, normalize } from 'node:path'
+import { homedir } from 'node:os'
+import type {
+  AgentEvent,
+  AgentRuntimeInfo,
+  Attachment,
+  SendPromptInput,
+  SendPromptResult,
+  SnapshotBlock,
+} from '../../src/shared/types'
+import { getSettings } from '../core/settings'
+import { getProxyToken } from '../core/secrets'
+import { log, redact } from '../core/logger'
+import { resolveTool } from './discovery'
+import type { ConnectionManager } from './connection'
+
+const MAX_TOOL_OUTPUT = 24000
+const MAX_DIRS = 12
+
+interface ToolAccumulator {
+  id: string
+  name: string
+  json: string
+}
+
+interface Session {
+  conversationId: string
+  proc: ChildProcess
+  sessionId: string | null
+  model: string
+  cwd: string
+  dirs: string[]
+  turnId: string | null
+  cancelled: boolean
+  restarting: boolean
+  busy: boolean
+  startedAt: number
+  toolCount: number
+  stderr: string[]
+  nonJson: string[]
+  toolByMessage: Map<string, Map<number, ToolAccumulator>>
+  endedTurns: Set<string>
+  idleTimer: NodeJS.Timeout | null
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+function safeDirectory(candidate: string | null | undefined): string | null {
+  if (!candidate || !candidate.trim()) return null
+  if (!isAbsolute(candidate)) return null
+  const normalized = normalize(candidate)
+  return isDirectory(normalized) ? normalized : null
+}
+
+function clamp(text: string): string {
+  if (text.length <= MAX_TOOL_OUTPUT) return text
+  return `${text.slice(0, MAX_TOOL_OUTPUT)}\n… truncated ${text.length - MAX_TOOL_OUTPUT} characters`
+}
+
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return clamp(content)
+  if (Array.isArray(content)) {
+    return clamp(
+      content
+        .map((part) => {
+          if (part && typeof part === 'object' && 'text' in part) return String((part as { text?: unknown }).text ?? '')
+          return ''
+        })
+        .join('\n')
+        .trim(),
+    )
+  }
+  if (content === null || content === undefined) return ''
+  return clamp(JSON.stringify(content))
+}
+
+function buildPrompt(text: string, attachments: Attachment[]): string {
+  if (attachments.length === 0) return text
+  const lines = attachments.map((attachment) => {
+    const kind = attachment.isDirectory ? 'folder' : 'file'
+    return `- ${attachment.path} (${kind}, ${attachment.name})`
+  })
+  return [
+    text,
+    '',
+    'Files attached through FCC Desktop — they exist on disk, open them with your file tools when relevant:',
+    ...lines,
+  ].join('\n')
+}
+
+export class AgentManager {
+  private sessions = new Map<string, Session>()
+
+  constructor(
+    private readonly connection: ConnectionManager,
+    private readonly emit: (event: AgentEvent) => void,
+  ) {}
+
+  runtime(conversationId: string): AgentRuntimeInfo | null {
+    const session = this.sessions.get(conversationId)
+    return {
+      conversationId,
+      sessionId: session?.sessionId ?? null,
+      model: session?.model ?? null,
+      workingDirectory: session?.cwd ?? null,
+      additionalDirs: session?.dirs ?? [],
+      busy: session?.busy ?? false,
+      startedAt: session?.startedAt ?? null,
+      toolCount: session?.toolCount ?? 0,
+    }
+  }
+
+  async send(input: SendPromptInput): Promise<SendPromptResult> {
+    const settings = getSettings()
+    const conversationId = input.conversationId
+    const existing = this.sessions.get(conversationId)
+    if (existing?.busy) {
+      throw new Error('The agent is still working on the previous message. Stop it before sending another.')
+    }
+
+    const status = await this.connection.probe()
+    if (status.state !== 'connected') {
+      throw new Error(status.message ?? `FCC is not reachable at ${this.connection.baseUrl()}.`)
+    }
+
+    const tool = resolveTool('claude')
+    if (!tool.path) {
+      throw new Error('fcc-claude.exe was not found. Set its path in Settings → Connection.')
+    }
+
+    const cwd =
+      safeDirectory(input.workingDirectory) ??
+      safeDirectory(settings.agent.workingDirectory) ??
+      safeDirectory(homedir()) ??
+      homedir()
+
+    const attachments = input.attachments.filter((attachment) => {
+      try {
+        return existsSync(attachment.path)
+      } catch {
+        return false
+      }
+    })
+
+    const requestedDirs = [
+      ...input.additionalDirs,
+      ...settings.agent.additionalDirs,
+      ...attachments.map((attachment) => (attachment.isDirectory ? attachment.path : dirname(attachment.path))),
+    ]
+    const dirs: string[] = []
+    for (const candidate of requestedDirs) {
+      const dir = safeDirectory(candidate)
+      if (!dir || dirs.includes(dir) || dir === cwd) continue
+      dirs.push(dir)
+      if (dirs.length >= MAX_DIRS) break
+    }
+
+    const model = input.model.trim()
+    const prompt = buildPrompt(input.text, attachments)
+
+    // Reuse the live process when the shape matches; otherwise restart it while
+    // preserving the Claude session id so the conversation keeps its context.
+    let session = existing
+    const compatible =
+      session &&
+      session.model === model &&
+      session.cwd === cwd &&
+      session.dirs.length === dirs.length &&
+      session.dirs.every((dir, index) => dir === dirs[index])
+
+    let resumeId = input.resumeSessionId ?? existing?.sessionId ?? null
+
+    if (session && !compatible) {
+      resumeId = session.sessionId ?? resumeId
+      session.restarting = true
+      this.killTree(session)
+      this.sessions.delete(conversationId)
+      session = undefined
+    }
+
+    if (!session) {
+      session = this.spawnSession({ conversationId, toolPath: tool.path, model, cwd, dirs, resumeId })
+      this.sessions.set(conversationId, session)
+    }
+
+    if (session.idleTimer) {
+      clearTimeout(session.idleTimer)
+      session.idleTimer = null
+    }
+    session.turnId = input.turnId
+    session.busy = true
+    session.cancelled = false
+
+    const line = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: prompt }] },
+    })
+
+    try {
+      session.proc.stdin?.write(`${line}\n`)
+    } catch (error) {
+      session.busy = false
+      throw new Error(`Could not write to the agent process: ${String(error)}`)
+    }
+
+    return {
+      turnId: input.turnId,
+      sessionId: session.sessionId ?? resumeId,
+      workingDirectory: cwd,
+      addedDirs: dirs,
+      prompt,
+    }
+  }
+
+  cancel(conversationId: string): boolean {
+    const session = this.sessions.get(conversationId)
+    if (!session) return false
+    session.cancelled = true
+    this.killTree(session)
+    return true
+  }
+
+  disposeAll(): void {
+    for (const session of this.sessions.values()) {
+      session.restarting = true
+      this.killTree(session)
+    }
+    this.sessions.clear()
+  }
+
+  private spawnSession(args: {
+    conversationId: string
+    toolPath: string
+    model: string
+    cwd: string
+    dirs: string[]
+    resumeId: string | null
+  }): Session {
+    const settings = getSettings()
+    const baseUrl = this.connection.baseUrl()
+    let port = '8082'
+    let host = settings.connection.host
+    try {
+      const parsed = new URL(baseUrl)
+      port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+      host = parsed.hostname
+    } catch {
+      /* keep defaults */
+    }
+    const token = getProxyToken() || 'freecc'
+
+    const cliArgs = [
+      '--print',
+      '--input-format',
+      'stream-json',
+      '--output-format',
+      'stream-json',
+      '--include-partial-messages',
+      '--verbose',
+      '--permission-mode',
+      settings.agent.permissionMode,
+    ]
+    // Non-interactive surfaces cannot answer permission prompts, so every mode
+    // declares its tool allowlist explicitly and lets the rest be denied fast.
+    const allowedTools: Partial<Record<typeof settings.agent.permissionMode, string>> = {
+      default: 'Read,Glob,Grep,LS,NotebookRead,TodoWrite',
+      acceptEdits: 'Read,Glob,Grep,LS,NotebookRead,TodoWrite,Edit,Write,MultiEdit,NotebookEdit',
+      plan: 'Read,Glob,Grep,LS,NotebookRead',
+    }
+    const allowlist = allowedTools[settings.agent.permissionMode]
+    if (allowlist) cliArgs.push('--allowedTools', allowlist)
+    if (args.model) cliArgs.push('--model', args.model)
+    for (const dir of args.dirs) cliArgs.push('--add-dir', dir)
+    if (args.resumeId) cliArgs.push('--resume', args.resumeId)
+
+    log.info(
+      'agent',
+      `Spawning agent for ${args.conversationId} (model=${args.model || 'default'}, cwd=${args.cwd}, dirs=${args.dirs.length}, resume=${Boolean(args.resumeId)})`,
+    )
+
+    const proc = spawn(args.toolPath, cliArgs, {
+      cwd: args.cwd,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PORT: port,
+        HOST: host,
+        ANTHROPIC_BASE_URL: baseUrl,
+        ANTHROPIC_AUTH_TOKEN: token,
+        CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+        DISABLE_TELEMETRY: '1',
+      },
+    })
+
+    const session: Session = {
+      conversationId: args.conversationId,
+      proc,
+      sessionId: args.resumeId,
+      model: args.model,
+      cwd: args.cwd,
+      dirs: args.dirs,
+      turnId: null,
+      cancelled: false,
+      restarting: false,
+      busy: false,
+      startedAt: Date.now(),
+      toolCount: 0,
+      stderr: [],
+      nonJson: [],
+      toolByMessage: new Map(),
+      endedTurns: new Set(),
+      idleTimer: null,
+    }
+
+    let buffer = ''
+    proc.stdout?.setEncoding('utf8')
+    proc.stdout?.on('data', (chunk: string) => {
+      buffer += chunk
+      let newline = buffer.indexOf('\n')
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        if (line) this.handleLine(session, line)
+        newline = buffer.indexOf('\n')
+      }
+    })
+
+    proc.stderr?.setEncoding('utf8')
+    proc.stderr?.on('data', (chunk: string) => {
+      const text = redact(chunk.toString()).trim()
+      if (!text) return
+      session.stderr.push(text)
+      if (session.stderr.length > 40) session.stderr.shift()
+      this.emit({ type: 'stderr', conversationId: session.conversationId, text: text.slice(0, 2000) })
+    })
+
+    proc.on('error', (error) => {
+      log.error('agent', `Agent process error: ${error.message}`)
+      this.emit({
+        type: 'error',
+        conversationId: session.conversationId,
+        turnId: session.turnId,
+        message: `Could not start the FCC agent: ${error.message}`,
+      })
+      this.finishTurn(session, true)
+    })
+
+    proc.on('close', (code) => {
+      if (session.idleTimer) {
+        clearTimeout(session.idleTimer)
+        session.idleTimer = null
+      }
+      const wasCancelled = session.cancelled
+      if (this.sessions.get(session.conversationId) === session) {
+        this.sessions.delete(session.conversationId)
+      }
+      if (session.turnId && !session.endedTurns.has(session.turnId)) {
+        if (!wasCancelled && !session.restarting && code !== 0) {
+          const detail = session.stderr.slice(-4).join('\n')
+          this.emit({
+            type: 'error',
+            conversationId: session.conversationId,
+            turnId: session.turnId,
+            message: `The agent process exited with code ${code ?? 'unknown'}.`,
+            detail: detail || undefined,
+          })
+        }
+        this.finishTurn(session, wasCancelled ? false : code !== 0)
+      }
+      this.emit({
+        type: 'exit',
+        conversationId: session.conversationId,
+        code,
+        cancelled: wasCancelled,
+      })
+      log.info('agent', `Agent exited for ${session.conversationId} (code=${code}, cancelled=${wasCancelled})`)
+    })
+
+    return session
+  }
+
+  private finishTurn(session: Session, isError: boolean): void {
+    const turnId = session.turnId
+    if (!turnId) return
+    session.busy = false
+    if (session.endedTurns.has(turnId)) return
+    session.endedTurns.add(turnId)
+    this.emit({
+      type: 'turn-end',
+      conversationId: session.conversationId,
+      turnId,
+      isError,
+      cancelled: session.cancelled,
+      resultText: null,
+      costUsd: null,
+      durationMs: null,
+      numTurns: null,
+      inputTokens: null,
+      outputTokens: null,
+      permissionDenials: 0,
+    })
+  }
+
+  private handleLine(session: Session, line: string): void {
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>
+    } catch {
+      session.nonJson.push(line.slice(0, 400))
+      if (session.nonJson.length > 20) session.nonJson.shift()
+      return
+    }
+
+    const type = String(parsed.type ?? '')
+    const turnId = session.turnId
+
+    if (type === 'system') {
+      const subtype = String(parsed.subtype ?? '')
+      if (subtype === 'init') {
+        const sessionId = typeof parsed.session_id === 'string' ? parsed.session_id : null
+        if (sessionId) session.sessionId = sessionId
+        const tools = Array.isArray(parsed.tools) ? parsed.tools.length : 0
+        session.toolCount = tools
+        this.emit({
+          type: 'session',
+          conversationId: session.conversationId,
+          sessionId: sessionId ?? '',
+          model: typeof parsed.model === 'string' ? parsed.model : null,
+          cwd: typeof parsed.cwd === 'string' ? parsed.cwd : null,
+          permissionMode: typeof parsed.permissionMode === 'string' ? parsed.permissionMode : null,
+          toolCount: tools,
+        })
+      } else if (subtype === 'status') {
+        const statusText = typeof parsed.status === 'string' ? parsed.status : 'working'
+        this.emit({
+          type: 'status',
+          conversationId: session.conversationId,
+          turnId,
+          phase: 'working',
+          detail: statusText,
+        })
+      }
+      return
+    }
+
+    if (type === 'stream_event') {
+      const event = parsed.event as Record<string, unknown> | undefined
+      if (!event) return
+      const apiMessageId =
+        (typeof (event.message as Record<string, unknown> | undefined)?.id === 'string'
+          ? ((event.message as Record<string, unknown>).id as string)
+          : null) ??
+        (typeof parsed.api_message_id === 'string' ? parsed.api_message_id : null) ??
+        session.turnId ??
+        'stream'
+
+      switch (event.type) {
+        case 'message_start': {
+          this.emit({
+            type: 'message-start',
+            conversationId: session.conversationId,
+            turnId: turnId ?? '',
+            apiMessageId,
+          })
+          this.emit({
+            type: 'status',
+            conversationId: session.conversationId,
+            turnId,
+            phase: 'thinking',
+          })
+          return
+        }
+        case 'content_block_start': {
+          const index = Number(event.index ?? 0)
+          const block = (event.content_block ?? {}) as Record<string, unknown>
+          const blockType = String(block.type ?? 'text')
+          if (blockType === 'tool_use') {
+            const toolId = String(block.id ?? '')
+            const name = String(block.name ?? 'tool')
+            const map = this.toolsFor(session, apiMessageId)
+            map.set(index, { id: toolId, name, json: '' })
+            this.emit({
+              type: 'block-start',
+              conversationId: session.conversationId,
+              turnId: turnId ?? '',
+              apiMessageId,
+              index,
+              block: { kind: 'tool', toolId, name },
+            })
+            this.emit({
+              type: 'status',
+              conversationId: session.conversationId,
+              turnId,
+              phase: 'working',
+              detail: name,
+            })
+          } else {
+            this.emit({
+              type: 'block-start',
+              conversationId: session.conversationId,
+              turnId: turnId ?? '',
+              apiMessageId,
+              index,
+              block: { kind: blockType === 'thinking' ? 'thinking' : 'text' },
+            })
+          }
+          return
+        }
+        case 'content_block_delta': {
+          const index = Number(event.index ?? 0)
+          const delta = (event.delta ?? {}) as Record<string, unknown>
+          if (typeof delta.text === 'string' && delta.text) {
+            this.emit({
+              type: 'text-delta',
+              conversationId: session.conversationId,
+              turnId: turnId ?? '',
+              apiMessageId,
+              index,
+              text: delta.text,
+            })
+          } else if (typeof delta.thinking === 'string' && delta.thinking) {
+            this.emit({
+              type: 'thinking-delta',
+              conversationId: session.conversationId,
+              turnId: turnId ?? '',
+              apiMessageId,
+              index,
+              text: delta.thinking,
+            })
+          } else if (typeof delta.partial_json === 'string') {
+            const entry = this.toolsFor(session, apiMessageId).get(index)
+            if (entry) entry.json += delta.partial_json
+          }
+          return
+        }
+        case 'content_block_stop': {
+          const index = Number(event.index ?? 0)
+          const entry = this.toolsFor(session, apiMessageId).get(index)
+          if (entry) {
+            let input: unknown = {}
+            try {
+              input = entry.json ? JSON.parse(entry.json) : {}
+            } catch {
+              input = { raw: entry.json }
+            }
+            this.emit({
+              type: 'tool-input',
+              conversationId: session.conversationId,
+              turnId: turnId ?? '',
+              toolId: entry.id,
+              input,
+            })
+          }
+          return
+        }
+        default:
+          return
+      }
+    }
+
+    if (type === 'assistant') {
+      const message = (parsed.message ?? {}) as Record<string, unknown>
+      const apiMessageId = typeof message.id === 'string' ? message.id : 'assistant'
+      const content = Array.isArray(message.content) ? message.content : []
+      const blocks: SnapshotBlock[] = []
+      for (const raw of content) {
+        if (!raw || typeof raw !== 'object') continue
+        const block = raw as Record<string, unknown>
+        if (block.type === 'text' && typeof block.text === 'string') {
+          blocks.push({ kind: 'text', text: block.text })
+        } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+          blocks.push({ kind: 'thinking', text: block.thinking })
+        } else if (block.type === 'tool_use') {
+          blocks.push({
+            kind: 'tool',
+            id: String(block.id ?? ''),
+            name: String(block.name ?? 'tool'),
+            input: block.input ?? {},
+          })
+        }
+      }
+      this.emit({
+        type: 'message-snapshot',
+        conversationId: session.conversationId,
+        turnId: turnId ?? '',
+        apiMessageId,
+        blocks,
+        thinkingDurationMs: typeof parsed.thinking_duration_ms === 'number' ? parsed.thinking_duration_ms : null,
+      })
+      return
+    }
+
+    if (type === 'user') {
+      const message = (parsed.message ?? {}) as Record<string, unknown>
+      const content = Array.isArray(message.content) ? message.content : []
+      for (const raw of content) {
+        if (!raw || typeof raw !== 'object') continue
+        const block = raw as Record<string, unknown>
+        if (block.type !== 'tool_result') continue
+        const toolId = String(block.tool_use_id ?? '')
+        this.emit({
+          type: 'tool-result',
+          conversationId: session.conversationId,
+          turnId: turnId ?? '',
+          toolId,
+          output: toolResultText(block.content),
+          isError: Boolean(block.is_error),
+        })
+      }
+      return
+    }
+
+    if (type === 'result') {
+      const usage = (parsed.usage ?? {}) as Record<string, unknown>
+      const isError = Boolean(parsed.is_error) || String(parsed.subtype ?? '') !== 'success'
+      const denials = Array.isArray(parsed.permission_denials) ? parsed.permission_denials.length : 0
+      if (turnId && !session.endedTurns.has(turnId)) {
+        session.endedTurns.add(turnId)
+        session.busy = false
+        this.emit({
+          type: 'turn-end',
+          conversationId: session.conversationId,
+          turnId,
+          isError,
+          cancelled: session.cancelled,
+          resultText: typeof parsed.result === 'string' ? parsed.result.slice(0, 4000) : null,
+          costUsd: typeof parsed.total_cost_usd === 'number' ? parsed.total_cost_usd : null,
+          durationMs: typeof parsed.duration_ms === 'number' ? parsed.duration_ms : null,
+          numTurns: typeof parsed.num_turns === 'number' ? parsed.num_turns : null,
+          inputTokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : null,
+          outputTokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : null,
+          permissionDenials: denials,
+        })
+      }
+      session.turnId = null
+      this.scheduleIdleShutdown(session)
+      return
+    }
+  }
+
+  /** Release the agent process after a long idle period; the session resumes from disk. */
+  private scheduleIdleShutdown(session: Session): void {
+    if (session.idleTimer) clearTimeout(session.idleTimer)
+    session.idleTimer = setTimeout(() => {
+      if (session.busy) return
+      if (this.sessions.get(session.conversationId) !== session) return
+      log.info('agent', 'Idle timeout reached — releasing the agent process')
+      session.restarting = true
+      this.sessions.delete(session.conversationId)
+      this.killTree(session)
+    }, 20 * 60 * 1000)
+    session.idleTimer.unref?.()
+  }
+
+  private toolsFor(session: Session, apiMessageId: string): Map<number, ToolAccumulator> {
+    let map = session.toolByMessage.get(apiMessageId)
+    if (!map) {
+      map = new Map()
+      session.toolByMessage.set(apiMessageId, map)
+    }
+    return map
+  }
+
+  private killTree(session: Session): void {
+    const pid = session.proc.pid
+    if (!pid) return
+    try {
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      } else {
+        session.proc.kill('SIGTERM')
+      }
+    } catch (error) {
+      log.warn('agent', `Failed to terminate agent ${pid}: ${String(error)}`)
+    }
+  }
+}

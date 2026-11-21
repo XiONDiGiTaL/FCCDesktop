@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "connection": {
+    "host": "127.0.0.1",
+    "port": 8082,
+    "baseUrl": "",
+    "serverExePath": "",
+    "claudeExePath": "",
+    "autoStartServer": false
+  },
+  "agent": {
+    "defaultModel": "",
+    "permissionMode": "bypassPermissions",
+    "workingDirectory": "",
+    "additionalDirs": [],
+    "showThinking": true
+  },
+  "ui": {
+    "fontScale": 1,
+    "density": "comfortable",
+    "reducedMotion": false,
+    "sidebarCollapsed": false,
+    "activityOpen": false
+  },
+  "workspaces": []
+}

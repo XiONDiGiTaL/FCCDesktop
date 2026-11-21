@@ -1,0 +1,40 @@
+appId: net.xiondigital.fccdesktop
+productName: FCC Desktop
+copyright: Copyright © 2026 XiON
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/**/*
+  - package.json
+  - '!**/*.map'
+
+asar: true
+compression: maximum
+
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  legalTrademarks: XiON
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: FCC Desktop
+  deleteAppDataOnUninstall: false
+  artifactName: FCC-Desktop-Setup-${version}.${ext}
+  uninstallDisplayName: FCC Desktop
+
+portable:
+  artifactName: FCC-Desktop-Portable-${version}.${ext}
