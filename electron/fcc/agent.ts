@@ -228,6 +228,32 @@ export class AgentManager {
     return true
   }
 
+  /**
+   * Abandon the current turn through the CLI control channel. Unlike cancel(),
+   * this keeps the process and its session alive, so a queued message can be
+   * sent immediately without losing the conversation's context.
+   */
+  interrupt(conversationId: string): boolean {
+    const session = this.sessions.get(conversationId)
+    if (!session || !session.busy || !session.turnId || !session.proc.stdin) return false
+    const line = JSON.stringify({
+      type: 'control_request',
+      request_id: `interrupt_${Date.now()}`,
+      request: { subtype: 'interrupt' },
+    })
+    try {
+      session.proc.stdin.write(`${line}\n`)
+      // The CLI answers the turn with a result; mark it so the UI shows the
+      // reply as interrupted rather than complete.
+      session.cancelled = true
+      log.info('agent', `Interrupt requested for ${conversationId}`)
+      return true
+    } catch (error) {
+      log.warn('agent', `Failed to interrupt agent: ${String(error)}`)
+      return false
+    }
+  }
+
   disposeAll(): void {
     for (const session of this.sessions.values()) {
       session.restarting = true

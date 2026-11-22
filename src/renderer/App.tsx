@@ -13,6 +13,7 @@ import type {
   MessageSegment,
   ModelCatalog,
   ModelInfo,
+  QueuedMessage,
   SettingsEnvelope,
   ToolState,
 } from '../shared/types'
@@ -229,6 +230,8 @@ export default function App() {
   const [toast, setToast] = useState<{ kind: 'error' | 'info'; text: string } | null>(null)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const [ready, setReady] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>({})
 
   const cache = useRef(new Map<string, Conversation>())
   const activeIdRef = useRef<string | null>(null)
@@ -237,6 +240,9 @@ export default function App() {
   const dirtyIds = useRef(new Set<string>())
   const summariesTimer = useRef<number | null>(null)
   const eventHandler = useRef<(event: AgentEvent) => void>(() => {})
+  const queuesRef = useRef<Record<string, QueuedMessage[]>>({})
+  const interruptRef = useRef<{ conversationId: string; item: QueuedMessage; timer: number | null } | null>(null)
+  const afterTurnRef = useRef<(conversationId: string) => void>(() => {})
 
   const settings = settingsEnvelope?.settings ?? null
   const models = catalog?.models ?? []
@@ -270,6 +276,7 @@ export default function App() {
           sessionId: conversation.sessionId,
           additionalDirs: conversation.additionalDirs,
           messages: conversation.messages,
+          queue: conversation.queue,
         })
         scheduleSummaries()
       } catch (error) {
@@ -320,7 +327,14 @@ export default function App() {
       }
       if (touched) flushView(conversation.id)
       if (event.type === 'exit') {
-        if (activeIdRef.current === conversation.id) setPhase('idle')
+        // A queued turn may already be running, so only fall idle when nothing
+        // in this conversation is still streaming.
+        if (
+          activeIdRef.current === conversation.id &&
+          !conversation.messages.some((item) => item.status === 'streaming')
+        ) {
+          setPhase('idle')
+        }
         conversation.updatedAt = Date.now()
         persist(conversation, true)
         void refreshSummaries()
@@ -332,12 +346,14 @@ export default function App() {
         persist(conversation, true)
         void refreshSummaries()
         void api.agent.runtime(conversation.id).then(setRuntime).catch(() => setRuntime(null))
+        afterTurnRef.current(conversation.id)
       }
       if (event.type === 'error') {
         conversation.updatedAt = Date.now()
         if (activeIdRef.current === conversation.id) setPhase('idle')
         persist(conversation, true)
         setToast({ kind: 'error', text: event.message })
+        afterTurnRef.current(conversation.id)
       }
     },
     [flushView, persist, refreshSummaries],
@@ -357,6 +373,15 @@ export default function App() {
     }
     cache.current.set(id, conversation)
     activeIdRef.current = id
+
+    // Restore anything that was queued before the app quit.
+    const restored = conversation.queue ?? []
+    const nextQueues = { ...queuesRef.current }
+    if (restored.length > 0) nextQueues[id] = restored
+    else delete nextQueues[id]
+    queuesRef.current = nextQueues
+    setQueues(nextQueues)
+
     setActive({ ...conversation })
     setDraft('')
     setAttachments([])
@@ -478,6 +503,12 @@ export default function App() {
               await api.conversations.remove(id)
               cache.current.delete(id)
               saveTimers.current.delete(id)
+              if (queuesRef.current[id]) {
+                const nextQueues = { ...queuesRef.current }
+                delete nextQueues[id]
+                queuesRef.current = nextQueues
+                setQueues(nextQueues)
+              }
               if (activeIdRef.current === id) {
                 activeIdRef.current = null
                 setActive(null)
@@ -590,6 +621,55 @@ export default function App() {
     })
   }, [])
 
+  // Drops anywhere in the window attach to the prompt: without a window-level
+  // guard, Chromium navigates the renderer to the dropped file and the app is
+  // replaced by a JSON or image preview.
+  useEffect(() => {
+    const hasFiles = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files')
+    let depth = 0
+
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      depth += 1
+      setDragging(true)
+    }
+
+    const onDragOver = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    }
+
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) setDragging(false)
+    }
+
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      depth = 0
+      setDragging(false)
+      const files = Array.from(event.dataTransfer?.files ?? [])
+      const paths = files.map((file) => window.fcc.files.pathForFile(file)).filter(Boolean)
+      if (paths.length === 0) return
+      void window.fcc.files.describe(paths).then((described) => addAttachments(described))
+    }
+
+    window.addEventListener('dragenter', onDragEnter)
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('dragleave', onDragLeave)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter)
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('dragleave', onDragLeave)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [addAttachments])
+
   const pickFiles = useCallback(async () => {
     try {
       const files = await api.dialogs.pickFiles()
@@ -620,6 +700,78 @@ export default function App() {
   }, [setWorkspace])
 
   // ------------------------------------------------------------------ agent
+  /**
+   * Appends one user message plus its placeholder assistant message to the
+   * cached conversation and hands the turn to the agent. The composer and the
+   * queue share this path so both behave identically.
+   */
+  const beginTurn = useCallback(
+    async (conversation: Conversation, text: string, turnAttachments: Attachment[]) => {
+      const model = conversation.model || preferredModel(models, settings?.agent.defaultModel ?? '')
+      const turnId = newId()
+      const now = Date.now()
+
+      const userMessage: ChatMessage = {
+        id: newId(),
+        role: 'user',
+        createdAt: now,
+        status: 'complete',
+        segments: [{ apiMessageId: 'user', blocks: [{ kind: 'text', text }] }],
+        attachments: turnAttachments.length ? [...turnAttachments] : undefined,
+      }
+      const assistantMessage: ChatMessage = {
+        id: turnId,
+        role: 'assistant',
+        createdAt: now + 1,
+        status: 'streaming',
+        segments: [],
+        meta: { model },
+      }
+
+      conversation.messages.push(userMessage, assistantMessage)
+      conversation.updatedAt = now
+      conversation.model = model
+      if (!conversation.title || conversation.title === 'New conversation') {
+        conversation.title = titleFromText(text)
+      }
+
+      if (activeIdRef.current === conversation.id) {
+        setActive({ ...conversation })
+        setPhase('thinking')
+      }
+      persist(conversation, true)
+
+      try {
+        const result = await api.agent.send({
+          conversationId: conversation.id,
+          turnId,
+          text,
+          attachments: turnAttachments,
+          model,
+          workingDirectory: conversation.workspacePath ?? settings?.agent.workingDirectory ?? '',
+          additionalDirs: conversation.additionalDirs,
+          resumeSessionId: conversation.sessionId,
+        })
+        if (result.sessionId && !conversation.sessionId) {
+          conversation.sessionId = result.sessionId
+          persist(conversation)
+        }
+        void api.agent.runtime(conversation.id).then(setRuntime).catch(() => {})
+      } catch (error) {
+        const message = friendlyError(error)
+        assistantMessage.status = 'error'
+        assistantMessage.error = message
+        if (activeIdRef.current === conversation.id) {
+          setActive({ ...conversation })
+          setPhase('idle')
+        }
+        setToast({ kind: 'error', text: message })
+        void api.agent.runtime(conversation.id).then(setRuntime).catch(() => {})
+      }
+    },
+    [models, persist, settings?.agent.defaultModel, settings?.agent.workingDirectory],
+  )
+
   const send = useCallback(async () => {
     const text = draft.trim()
     if (!text || !settings) return
@@ -640,72 +792,140 @@ export default function App() {
       }
     }
 
-    const model = conversation.model || preferredModel(models, settings.agent.defaultModel)
-    const turnId = newId()
-    const now = Date.now()
-
-    const userMessage: ChatMessage = {
-      id: newId(),
-      role: 'user',
-      createdAt: now,
-      status: 'complete',
-      segments: [{ apiMessageId: 'user', blocks: [{ kind: 'text', text }] }],
-      attachments: attachments.length ? [...attachments] : undefined,
-    }
-    const assistantMessage: ChatMessage = {
-      id: turnId,
-      role: 'assistant',
-      createdAt: now + 1,
-      status: 'streaming',
-      segments: [],
-      meta: { model },
-    }
-
-    conversation.messages.push(userMessage, assistantMessage)
-    conversation.updatedAt = now
-    conversation.model = model
-    if (!conversation.title || conversation.title === 'New conversation') {
-      conversation.title = titleFromText(text)
-    }
     const sentAttachments = [...attachments]
-
-    setActive({ ...conversation })
     setDraft('')
     setAttachments([])
-    setPhase('thinking')
-    persist(conversation, true)
+    await beginTurn(conversation, text, sentAttachments)
+  }, [active, attachments, beginTurn, draft, models, settings])
 
-    try {
-      const result = await api.agent.send({
-        conversationId: conversation.id,
-        turnId,
-        text,
-        attachments: sentAttachments,
-        model,
-        workingDirectory: conversation.workspacePath ?? settings.agent.workingDirectory,
-        additionalDirs: conversation.additionalDirs,
-        resumeSessionId: conversation.sessionId,
-      })
-      if (result.sessionId && !conversation.sessionId) {
-        conversation.sessionId = result.sessionId
-        persist(conversation)
+  // ------------------------------------------------------------------- queue
+  const setQueueFor = useCallback(
+    (conversationId: string, items: QueuedMessage[]) => {
+      const next = { ...queuesRef.current }
+      if (items.length > 0) next[conversationId] = items
+      else delete next[conversationId]
+      queuesRef.current = next
+      setQueues(next)
+
+      // The queue is part of the conversation on disk, so a quit or reload
+      // restores it. Write immediately: the debounce could lose a last edit.
+      const conversation = cache.current.get(conversationId)
+      if (conversation) {
+        conversation.queue = items
+        conversation.updatedAt = Date.now()
+        persist(conversation, true)
       }
-      void api.agent.runtime(conversation.id).then(setRuntime).catch(() => {})
-    } catch (error) {
-      const message = friendlyError(error)
-      assistantMessage.status = 'error'
-      assistantMessage.error = message
-      projectionSafeUpdate(conversation.id)
-      setPhase('idle')
-      setToast({ kind: 'error', text: message })
-    }
+    },
+    [persist],
+  )
 
-    function projectionSafeUpdate(id: string) {
-      const target = cache.current.get(id)
-      if (!target) return
-      if (activeIdRef.current === id) setActive({ ...target })
+  const queueDraft = useCallback(() => {
+    const text = draft.trim()
+    if (!text) return
+    const conversation = activeIdRef.current ? cache.current.get(activeIdRef.current) ?? null : null
+    if (!conversation) return
+    const item: QueuedMessage = {
+      id: newId(),
+      text,
+      attachments: [...attachments],
+      createdAt: Date.now(),
     }
-  }, [active, attachments, draft, models, persist, settings])
+    setQueueFor(conversation.id, [...(queuesRef.current[conversation.id] ?? []), item])
+    setDraft('')
+    setAttachments([])
+  }, [attachments, draft, setQueueFor])
+
+  const editQueued = useCallback(
+    (id: string, text: string) => {
+      const conversationId = activeIdRef.current
+      if (!conversationId) return
+      setQueueFor(
+        conversationId,
+        (queuesRef.current[conversationId] ?? []).map((item) => (item.id === id ? { ...item, text } : item)),
+      )
+    },
+    [setQueueFor],
+  )
+
+  const removeQueued = useCallback(
+    (id: string) => {
+      const conversationId = activeIdRef.current
+      if (!conversationId) return
+      setQueueFor(
+        conversationId,
+        (queuesRef.current[conversationId] ?? []).filter((item) => item.id !== id),
+      )
+    },
+    [setQueueFor],
+  )
+
+  /** When a turn ends, hand the agent the next item: an interrupt first, then the queue. */
+  const afterTurn = useCallback(
+    (conversationId: string) => {
+      const conversation = cache.current.get(conversationId)
+      if (!conversation) return
+      if (conversation.messages.some((message) => message.status === 'streaming')) return
+
+      const pending = interruptRef.current
+      if (pending && pending.conversationId === conversationId) {
+        interruptRef.current = null
+        if (pending.timer) window.clearTimeout(pending.timer)
+        void beginTurn(conversation, pending.item.text, pending.item.attachments)
+        return
+      }
+
+      const list = queuesRef.current[conversationId] ?? []
+      const next = list[0]
+      if (!next) return
+      setQueueFor(conversationId, list.slice(1))
+      void beginTurn(conversation, next.text, next.attachments)
+    },
+    [beginTurn, setQueueFor],
+  )
+
+  afterTurnRef.current = afterTurn
+
+  const sendQueuedNow = useCallback(
+    async (id: string) => {
+      const conversation = activeIdRef.current ? cache.current.get(activeIdRef.current) ?? null : null
+      if (!conversation) return
+      const list = queuesRef.current[conversation.id] ?? []
+      const item = list.find((entry) => entry.id === id)
+      if (!item) return
+
+      setQueueFor(conversation.id, list.filter((entry) => entry.id !== id))
+
+      const streaming = conversation.messages.some((message) => message.status === 'streaming')
+      if (!streaming) {
+        await beginTurn(conversation, item.text, item.attachments)
+        return
+      }
+
+      // interrupt() goes through the CLI control channel, so the agent process
+      // and its session survive and the queued turn keeps the same context.
+      const pending = { conversationId: conversation.id, item, timer: null as number | null }
+      interruptRef.current = pending
+      const acknowledged = await api.agent.interrupt(conversation.id)
+      if (!acknowledged) {
+        interruptRef.current = null
+        setQueueFor(conversation.id, [item, ...(queuesRef.current[conversation.id] ?? [])])
+        setToast({ kind: 'error', text: 'Could not interrupt the running turn — the message stayed queued.' })
+        return
+      }
+
+      pending.timer = window.setTimeout(() => {
+        if (interruptRef.current !== pending) return
+        interruptRef.current = null
+        setQueueFor(conversation.id, [item, ...(queuesRef.current[conversation.id] ?? [])])
+        setToast({
+          kind: 'info',
+          text: 'The agent ignored the interrupt — stopping this turn, then sending your message.',
+        })
+        void api.agent.cancel(conversation.id)
+      }, 6000)
+    },
+    [beginTurn, setQueueFor],
+  )
 
   const stop = useCallback(async () => {
     if (!active) return
@@ -839,7 +1059,11 @@ export default function App() {
               onClearWorkspace={() => void setWorkspace(null)}
               status={status}
               onOpenSettings={() => setSettingsOpen(true)}
-              onAddAttachments={(incoming) => void addAttachments(incoming)}
+              queue={active ? queues[active.id] ?? [] : []}
+              onQueue={queueDraft}
+              onQueueEdit={editQueued}
+              onQueueRemove={removeQueued}
+              onQueueSendNow={(id) => void sendQueuedNow(id)}
             />
           </div>
 
@@ -879,6 +1103,8 @@ export default function App() {
                 void (async () => {
                   await api.conversations.clearAll()
                   cache.current.clear()
+                  queuesRef.current = {}
+                  setQueues({})
                   activeIdRef.current = null
                   setActive(null)
                   setRuntime(null)
@@ -913,6 +1139,12 @@ export default function App() {
           </div>
         ) : null}
       </Modal>
+
+      {dragging ? (
+        <div className="global-drop" aria-hidden="true">
+          <span>Drop files or folders to attach them</span>
+        </div>
+      ) : null}
 
       {toast ? (
         <div className={`toast toast-${toast.kind}`} role="status">

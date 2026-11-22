@@ -15,6 +15,7 @@ import type {
   DeepPartial,
   DiagnosticsSnapshot,
   ModelCatalog,
+  QueuedMessage,
   SendPromptInput,
   SendPromptResult,
   ServerStartResult,
@@ -306,6 +307,9 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
     if (Array.isArray(safe.messages)) {
       cleaned.messages = (safe.messages as ChatMessage[]).slice(-4000)
     }
+    if (Array.isArray(safe.queue)) {
+      cleaned.queue = (safe.queue as QueuedMessage[]).slice(0, 50)
+    }
     const updated = updateConversation(id, cleaned)
     broadcastConversations()
     return updated
@@ -377,6 +381,11 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
   ipcMain.handle('agent:cancel', (_event, conversationId: unknown) => {
     if (typeof conversationId !== 'string') return false
     return agent.cancel(conversationId)
+  })
+
+  ipcMain.handle('agent:interrupt', (_event, conversationId: unknown) => {
+    if (typeof conversationId !== 'string') return false
+    return agent.interrupt(conversationId)
   })
 
   ipcMain.handle('agent:runtime', (_event, conversationId: unknown) => {

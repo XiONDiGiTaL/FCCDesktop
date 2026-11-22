@@ -27,6 +27,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   claude: 'Claude',
   nvidia_nim: 'NVIDIA NIM',
   openai: 'OpenAI',
+  // FCC prefixes OpenRouter ids with `open_router/`, so both spellings matter.
+  open_router: 'OpenRouter',
   openrouter: 'OpenRouter',
   groq: 'Groq',
   deepseek: 'DeepSeek',

@@ -5,15 +5,18 @@ import { conversationsDir } from './paths'
 import { writeJsonAtomic } from './atomic'
 import { log } from './logger'
 import type {
+  Attachment,
   ChatMessage,
   Conversation,
   ConversationPatch,
   ConversationSummary,
   CreateConversationInput,
   MessageSegment,
+  QueuedMessage,
 } from '../../src/shared/types'
 
 const MAX_MESSAGES = 4000
+const MAX_QUEUED = 50
 
 const store = new Map<string, Conversation>()
 let loaded = false
@@ -32,6 +35,34 @@ function sanitizeSegment(input: unknown): MessageSegment | null {
   const apiMessageId = typeof record.apiMessageId === 'string' ? record.apiMessageId : 'unknown'
   const blocks = Array.isArray(record.blocks) ? record.blocks : []
   return { apiMessageId, blocks: blocks as MessageSegment['blocks'] }
+}
+
+function sanitizeQueue(input: unknown): QueuedMessage[] {
+  if (!Array.isArray(input)) return []
+  const queue: QueuedMessage[] = []
+  const seen = new Set<string>()
+  for (const entry of input) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    const id = typeof record.id === 'string' ? record.id : ''
+    const text = typeof record.text === 'string' ? record.text.trim() : ''
+    if (!id || !text || seen.has(id)) continue
+    seen.add(id)
+    const attachments = Array.isArray(record.attachments)
+      ? (record.attachments.filter(
+          (item): item is Attachment =>
+            Boolean(item) && typeof item === 'object' && typeof (item as Attachment).path === 'string',
+        ) as Attachment[])
+      : []
+    queue.push({
+      id,
+      text: text.slice(0, 200000),
+      attachments: attachments.slice(0, 20),
+      createdAt: typeof record.createdAt === 'number' ? record.createdAt : Date.now(),
+    })
+    if (queue.length >= MAX_QUEUED) break
+  }
+  return queue
 }
 
 function sanitizeMessage(input: unknown): ChatMessage | null {
@@ -83,6 +114,7 @@ export function loadConversations(): void {
         messages: Array.isArray(parsed.messages)
           ? parsed.messages.map(sanitizeMessage).filter((m): m is ChatMessage => m !== null)
           : [],
+        queue: sanitizeQueue(parsed.queue),
       })
     } catch (error) {
       log.warn('conversations', `Skipping unreadable conversation ${entry}: ${String(error)}`)
@@ -92,9 +124,16 @@ export function loadConversations(): void {
 }
 
 function summary(conversation: Conversation): ConversationSummary {
-  const { messages, sessionId: _sessionId, additionalDirs: _dirs, ...rest } = conversation
+  const {
+    messages,
+    sessionId: _sessionId,
+    additionalDirs: _dirs,
+    queue: _queue,
+    ...rest
+  } = conversation
   void _sessionId
   void _dirs
+  void _queue
   return { ...rest, messageCount: messages.length, status: 'complete' }
 }
 
@@ -127,6 +166,7 @@ export function createConversation(input: CreateConversationInput): Conversation
     sessionId: null,
     additionalDirs: [],
     messages: [],
+    queue: [],
   }
   store.set(conversation.id, conversation)
   writeJsonAtomic(fileFor(conversation.id), conversation)
@@ -154,6 +194,9 @@ export function updateConversation(id: string, patch: ConversationPatch): Conver
   }
   if (Array.isArray(patch.messages)) {
     next.messages = patch.messages.slice(-MAX_MESSAGES)
+  }
+  if (Array.isArray(patch.queue)) {
+    next.queue = sanitizeQueue(patch.queue)
   }
   next.updatedAt = Date.now()
   store.set(id, next)

@@ -178,6 +178,13 @@ export interface ChatMessage {
   meta?: MessageMeta
 }
 
+export interface QueuedMessage {
+  id: string
+  text: string
+  attachments: Attachment[]
+  createdAt: number
+}
+
 export interface ConversationSummary {
   id: string
   title: string
@@ -194,6 +201,8 @@ export interface Conversation extends ConversationSummary {
   sessionId: string | null
   additionalDirs: string[]
   messages: ChatMessage[]
+  /** Messages queued while a turn is running; persisted so a restart restores them. */
+  queue: QueuedMessage[]
 }
 
 export interface CreateConversationInput {
@@ -210,6 +219,7 @@ export interface ConversationPatch {
   sessionId?: string | null
   additionalDirs?: string[]
   messages?: ChatMessage[]
+  queue?: QueuedMessage[]
 }
 
 export interface SendPromptInput {
@@ -388,6 +398,8 @@ export interface FccBridge {
   agent: {
     send(input: SendPromptInput): Promise<SendPromptResult>
     cancel(conversationId: string): Promise<boolean>
+    /** Stops the current turn but keeps the agent process and session alive. */
+    interrupt(conversationId: string): Promise<boolean>
     runtime(conversationId: string): Promise<AgentRuntimeInfo | null>
     onEvent(cb: (event: AgentEvent) => void): () => void
   }

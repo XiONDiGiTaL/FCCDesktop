@@ -79,6 +79,7 @@ const bridge: FccBridge = {
   agent: {
     send: (input) => ipcRenderer.invoke('agent:send', input),
     cancel: (conversationId: string) => ipcRenderer.invoke('agent:cancel', conversationId),
+    interrupt: (conversationId: string) => ipcRenderer.invoke('agent:interrupt', conversationId),
     runtime: (conversationId: string) => ipcRenderer.invoke('agent:runtime', conversationId),
     onEvent: (cb: (event: AgentEvent) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => cb(payload)

@@ -174,6 +174,17 @@ NVIDIA NIM is the shortest free path: hosted endpoints for prototyping, **no cre
 4. Leave `MODEL` on the default `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, or search the model dropdown and select another model. For a coding agent, pick one that supports tool calling — larger general-purpose models work; tiny or reasoning-only entries tend to fail on tool use.
 5. Click **Apply** to save your model selection. FCC keeps the provider active from then on and the model becomes available to every connected client, including FCC Desktop.
 
+#### Or: connect OpenRouter
+
+OpenRouter puts most hosted models behind one key — useful when NVIDIA does not carry the model you want. It is pay-as-you-go, with free variants such as the `openrouter/free` entry point.
+
+1. Create a key at [openrouter.ai/keys](https://openrouter.ai/keys). Copy it immediately; the value is shown only once.
+2. In the **Admin UI**, open **Providers**, find **OpenRouter**, click **Add key**, paste the key and click **Save**.
+3. Set `MODEL` to `open_router/openrouter/free`, or search the dropdown for a specific `open_router/<vendor>/<model>` entry.
+4. Click **Apply**. FCC now serves those models and lists them from `/v1/models`.
+
+FCC prefixes these ids with `open_router/`, so FCC Desktop groups them under **OpenRouter** in the composer picker. Switching providers needs no reinstall: picker contents are read live from FCC, so after adding or changing a model in Admin press **Refresh** in the picker.
+
 #### Optional: protect the local proxy
 
 To put a bearer token in front of the proxy, enable **Proxy Authentication** in Admin and set a token there. FCC then requires it on every request; paste the same token into FCC Desktop under Settings → Connection → *Proxy token*, where it is encrypted with the OS keystore (DPAPI). Leave both blank if only you use this machine.
@@ -192,8 +203,8 @@ Download from the [releases page](https://github.com/XiONDiGiTaL/fccGUI/releases
 
 | Artifact | Use |
 | --- | --- |
-| `FCC-Desktop-Setup-1.0.1.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
-| `FCC-Desktop-Portable-1.0.1.exe` | Single portable executable, no install — run it from anywhere. |
+| `FCC-Desktop-Setup-1.0.2.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
+| `FCC-Desktop-Portable-1.0.2.exe` | Single portable executable, no install — run it from anywhere. |
 
 Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on first launch. Click **More info → Run anyway**. The build is reproducible from source with `npm run dist` (see [Building installers](#building-installers)).
 
@@ -205,7 +216,7 @@ Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on f
 4. Pick a model from the composer picker. The catalog is read live from `/v1/models`; if it is empty, press **Refresh** there.
 5. Type a prompt and press <kbd>Enter</kbd>. Tool calls appear as cards you can expand. <kbd>Esc</kbd> stops a turn.
 
-Nothing is sent while the endpoint is unreachable. The offline state — and Settings → Connection — show the three setup steps in the app itself: the FCC install command with a copy button, how to start the server, and where to add a free NVIDIA key in the Admin UI. The connection re-checks every 15 seconds, so the composer unlocks on its own once FCC answers.
+Nothing is sent while the endpoint is unreachable. The offline state — and Settings → Connection — show the setup steps in the app itself: the FCC install command with a copy button, how to start the server, and where to add either a free NVIDIA key or an OpenRouter key in the Admin UI. The connection re-checks every 15 seconds, so the composer unlocks on its own once FCC answers.
 
 ---
 
@@ -359,8 +370,8 @@ npm run dist:dir   # unpacked build only (fast smoke test)
 `electron-builder.yml` targets `nsis` and `portable` for x64, with the XiØN icon from `build/icon.png`. Output:
 
 ```
-release/FCC-Desktop-Setup-1.0.1.exe
-release/FCC-Desktop-Portable-1.0.1.exe
+release/FCC-Desktop-Setup-1.0.2.exe
+release/FCC-Desktop-Portable-1.0.2.exe
 release/win-unpacked/
 ```
 

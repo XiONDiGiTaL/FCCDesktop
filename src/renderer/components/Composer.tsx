@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Attachment, ConnectionStatus, ModelInfo } from '../../shared/types'
 import { formatBytes, folderName } from '../lib/format'
 import ModelPicker from './ModelPicker'
+import MessageQueue, { type QueuedMessage } from './MessageQueue'
 import { Badge, Button, IconButton } from './ui'
 import {
   CloseIcon,
@@ -9,6 +10,7 @@ import {
   FolderIcon,
   ImageIcon,
   PaperclipIcon,
+  PlusIcon,
   SendIcon,
   StopIcon,
 } from './Icons'
@@ -34,7 +36,11 @@ interface ComposerProps {
   onClearWorkspace: () => void
   status: ConnectionStatus | null
   onOpenSettings: () => void
-  onAddAttachments: (attachments: Attachment[]) => void
+  queue: QueuedMessage[]
+  onQueue: () => void
+  onQueueEdit: (id: string, text: string) => void
+  onQueueRemove: (id: string) => void
+  onQueueSendNow: (id: string) => void
 }
 
 function ComposerAttachment({
@@ -103,10 +109,13 @@ export default function Composer({
   onClearWorkspace,
   status,
   onOpenSettings,
-  onAddAttachments,
+  queue,
+  onQueue,
+  onQueueEdit,
+  onQueueRemove,
+  onQueueSendNow,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const [dragging, setDragging] = useState(false)
   const offline = status?.state !== 'connected'
 
   useEffect(() => {
@@ -116,30 +125,17 @@ export default function Composer({
     element.style.height = `${Math.min(element.scrollHeight, 260)}px`
   }, [value])
 
-  const handleDrop = async (event: React.DragEvent) => {
-    event.preventDefault()
-    setDragging(false)
-    const files = Array.from(event.dataTransfer.files)
-    if (files.length === 0) return
-    const paths = files.map((file) => window.fcc.files.pathForFile(file)).filter(Boolean)
-    if (paths.length === 0) return
-    const described = await window.fcc.files.describe(paths)
-    onAddAttachments(described)
-  }
-
   return (
     <div className="composer-wrap">
-      <div
-        className={`composer ${dragging ? 'is-dragging' : ''}`}
-        onDragOver={(event) => {
-          event.preventDefault()
-          setDragging(true)
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(event) => void handleDrop(event)}
-      >
-        {dragging ? <div className="drop-veil">Drop files to attach them</div> : null}
+      <MessageQueue
+        items={queue}
+        busy={busy}
+        onEdit={onQueueEdit}
+        onRemove={onQueueRemove}
+        onSendNow={onQueueSendNow}
+      />
 
+      <div className="composer">
         {attachments.length > 0 ? (
           <div className="composer-atts">
             {attachments.map((attachment) => (
@@ -160,14 +156,22 @@ export default function Composer({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
-              if (!busy && value.trim()) onSend()
+              if (!value.trim()) return
+              if (busy) onQueue()
+              else if (!offline) onSend()
             }
             if (event.key === 'Escape' && busy) {
               event.preventDefault()
               onStop()
             }
           }}
-          placeholder={offline ? 'FCC is offline — follow the setup steps above to connect' : 'Message FCC — describe what you want built, fixed or explained…'}
+          placeholder={
+            offline
+              ? 'FCC is offline — follow the setup steps above to connect'
+              : busy
+                ? 'Queue a follow-up — it sends when this turn ends, or use Send now to interrupt'
+                : 'Message FCC — describe what you want built, fixed or explained…'
+          }
           rows={1}
           spellCheck
         />
@@ -208,9 +212,19 @@ export default function Composer({
               status={status}
             />
             {busy ? (
-              <Button variant="danger" onClick={onStop} icon={<StopIcon size={15} />}>
-                Stop
-              </Button>
+              <>
+                <Button
+                  variant="primary"
+                  onClick={onQueue}
+                  disabled={!value.trim() || offline}
+                  icon={<PlusIcon size={15} />}
+                >
+                  Queue
+                </Button>
+                <Button variant="danger" onClick={onStop} icon={<StopIcon size={15} />}>
+                  Stop
+                </Button>
+              </>
             ) : (
               <Button variant="primary" onClick={onSend} disabled={!value.trim() || offline} icon={<SendIcon size={16} />}>
                 Send
@@ -222,7 +236,7 @@ export default function Composer({
 
       <div className="composer-hint">
         <span>
-          <kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
+          <kbd>Enter</kbd> {busy ? 'queue' : 'send'} · <kbd>Shift</kbd>+<kbd>Enter</kbd> newline
           {busy ? (
             <>
               {' '}

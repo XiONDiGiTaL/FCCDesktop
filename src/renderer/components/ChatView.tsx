@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { ConnectionStatus, Conversation, ModelInfo } from '../../shared/types'
-import { folderName, statusLabel } from '../lib/format'
+import { folderName, shortPath, statusLabel, toolLabel, toolSummary } from '../lib/format'
+import LiveActivity from './LiveActivity'
 import MessageItem from './MessageItem'
 import SetupGuide from './SetupGuide'
 import { IconButton, StatusDot } from './ui'
@@ -89,6 +90,22 @@ export default function ChatView({
   const messages = conversation?.messages ?? []
   const modelName =
     models.find((model) => model.id === conversation?.model)?.displayName || conversation?.model || 'Server default'
+
+  // The turn in flight drives the live indicator: elapsed time plus the tool
+  // that is running right now.
+  const streamingMessage = [...messages].reverse().find((message) => message.status === 'streaming') ?? null
+  const streamStartedAt = streamingMessage?.createdAt ?? null
+  const runningTools =
+    streamingMessage?.segments
+      .flatMap((segment) => segment.blocks)
+      .filter((block) => block.kind === 'tool' && block.tool.status === 'running') ?? []
+  const lastTool = runningTools[runningTools.length - 1]
+  const toolDetail =
+    lastTool && lastTool.kind === 'tool'
+      ? [toolLabel(lastTool.tool.name), shortPath(toolSummary(lastTool.tool.name, lastTool.tool.input), 48)]
+          .filter(Boolean)
+          .join(' · ')
+      : null
 
   if (empty || !conversation) {
     return (
@@ -183,8 +200,7 @@ export default function ChatView({
         <div className="chat-header-actions">
           {streaming ? (
             <span className="live-pill">
-              <span className={`live-dot phase-${phase}`} />
-              {phase === 'thinking' ? 'Thinking' : phase === 'working' ? 'Working' : 'Running'}
+              <LiveActivity phase={phase} startedAt={streamStartedAt} active compact />
             </span>
           ) : null}
           <IconButton label="Conversation settings" onClick={onOpenSettings}>
@@ -219,10 +235,7 @@ export default function ChatView({
           })}
           {streaming ? (
             <div className="chat-thinking">
-              <span className={`thinking-orb phase-${phase}`} />
-              <span>
-                {phase === 'working' ? 'Running tools…' : phase === 'thinking' ? 'Reasoning…' : 'Waiting for FCC…'}
-              </span>
+              <LiveActivity phase={phase} startedAt={streamStartedAt} active detail={toolDetail} />
             </div>
           ) : null}
         </div>

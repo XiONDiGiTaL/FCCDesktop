@@ -6,6 +6,7 @@ const INSTALL_COMMAND =
   '& ([scriptblock]::Create((irm "https://raw.githubusercontent.com/Alishahryar1/free-claude-code/main/scripts/install.ps1")))'
 
 const NVIDIA_KEYS_URL = 'https://build.nvidia.com/settings/api-keys'
+const OPENROUTER_KEYS_URL = 'https://openrouter.ai/keys'
 const FCC_QUICK_START_URL = 'https://github.com/Alishahryar1/free-claude-code#quick-start'
 
 interface SetupGuideProps {
@@ -40,7 +41,7 @@ export default function SetupGuide({ status, onOpenSettings, variant = 'inline' 
         <h2 className="setup-title">Start Free Claude Code, then connect</h2>
         <p className="setup-lede">
           Nothing answered at <code>{truncateUrl(baseUrl)}</code>. This app drives the FCC proxy — it cannot run an
-          agent without it. Three steps, once per machine.
+          agent without it. Steps 1–2 install and start FCC; step 3 or 4 connects a provider.
         </p>
       </header>
 
@@ -106,6 +107,35 @@ export default function SetupGuide({ status, onOpenSettings, variant = 'inline' 
               </button>
               <button className="setup-link" onClick={() => void window.fcc.app.openExternal(NVIDIA_KEYS_URL)}>
                 Get NVIDIA key
+                <ArrowUpRightIcon size={12} />
+              </button>
+            </div>
+          </div>
+        </li>
+        <li className="setup-step">
+          <span className="setup-index">4</span>
+          <div className="setup-body">
+            <h3>Or connect OpenRouter instead</h3>
+            <ol className="setup-mini">
+              <li>
+                Get a key at <strong>openrouter.ai</strong> → Keys. Pay-as-you-go, with free variants.
+              </li>
+              <li>
+                In Admin open <strong>Providers</strong>, pick <strong>OpenRouter</strong>, click{' '}
+                <strong>Add key</strong>, paste it and click <strong>Save</strong>.
+              </li>
+              <li>
+                Set <code>MODEL</code> to <code>open_router/openrouter/free</code> or choose a specific model, then click{' '}
+                <strong>Apply</strong>.
+              </li>
+              <li>
+                Its models now come back from <code>/v1/models</code> — press <strong>Refresh</strong> in the composer
+                picker to group them under OpenRouter.
+              </li>
+            </ol>
+            <div className="setup-links">
+              <button className="setup-link" onClick={() => void window.fcc.app.openExternal(OPENROUTER_KEYS_URL)}>
+                Get OpenRouter key
                 <ArrowUpRightIcon size={12} />
               </button>
             </div>
