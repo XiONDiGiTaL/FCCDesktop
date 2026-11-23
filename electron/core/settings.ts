@@ -22,6 +22,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
     additionalDirs: [],
     showThinking: true,
   },
+  skills: {
+    enabled: true,
+    autoInvoke: true,
+    maxActive: 3,
+    mode: 'native',
+    manageExternal: false,
+    showIndicator: true,
+  },
   ui: {
     fontScale: 1,
     density: 'comfortable',
@@ -72,6 +80,7 @@ export function sanitizeSettings(input: unknown): AppSettings {
   const raw = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
   const connection = (raw.connection && typeof raw.connection === 'object' ? raw.connection : {}) as Record<string, unknown>
   const agent = (raw.agent && typeof raw.agent === 'object' ? raw.agent : {}) as Record<string, unknown>
+  const skills = (raw.skills && typeof raw.skills === 'object' ? raw.skills : {}) as Record<string, unknown>
   const ui = (raw.ui && typeof raw.ui === 'object' ? raw.ui : {}) as Record<string, unknown>
 
   const baseUrlRaw = asString(connection.baseUrl, '').trim().replace(/\/+$/, '')
@@ -100,6 +109,14 @@ export function sanitizeSettings(input: unknown): AppSettings {
       workingDirectory: asString(agent.workingDirectory, '').trim(),
       additionalDirs,
       showThinking: asBoolean(agent.showThinking, true),
+    },
+    skills: {
+      enabled: asBoolean(skills.enabled, DEFAULT_SETTINGS.skills.enabled),
+      autoInvoke: asBoolean(skills.autoInvoke, DEFAULT_SETTINGS.skills.autoInvoke),
+      maxActive: Math.round(asNumber(skills.maxActive, DEFAULT_SETTINGS.skills.maxActive, 1, 5)),
+      mode: skills.mode === 'inline' ? 'inline' : 'native',
+      manageExternal: asBoolean(skills.manageExternal, DEFAULT_SETTINGS.skills.manageExternal),
+      showIndicator: asBoolean(skills.showIndicator, DEFAULT_SETTINGS.skills.showIndicator),
     },
     ui: {
       fontScale: asNumber(ui.fontScale, 1, 0.85, 1.3),
@@ -136,6 +153,7 @@ export function updateSettings(patch: DeepPartial<AppSettings>): AppSettings {
     ...base,
     connection: { ...base.connection, ...(patch.connection ?? {}) },
     agent: { ...base.agent, ...(patch.agent ?? {}) },
+    skills: { ...base.skills, ...(patch.skills ?? {}) },
     ui: { ...base.ui, ...(patch.ui ?? {}) },
     workspaces: patch.workspaces !== undefined ? (patch.workspaces as Workspace[]) : base.workspaces,
   }

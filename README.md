@@ -25,6 +25,7 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - [Models](#models)
 - [Agent permissions](#agent-permissions)
 - [Workspaces, files and attachments](#workspaces-files-and-attachments)
+- [Agent Skills](#agent-skills)
 - [Data, privacy and security](#data-privacy-and-security)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Development](#development)
@@ -70,6 +71,15 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - Image attachments get thumbnails from the main process; text/code/document/archive kinds are classified by extension.
 - Attachments are described in the prompt manifest and their directories passed as `--add-dir`, so the agent can read them.
 - Workspaces pin a project so every conversation starts in the right place; extra directories are configurable globally.
+
+**Agent Skills**
+- A native Skills view: installed library, discovery and configuration in one place, not a folder browser.
+- Reads the Claude Code skill folders (`%USERPROFILE%\.claude\skills\`, `<workspace>\.claude\skills\`), so existing skills appear without reinstalling.
+- Discover across skills.sh, GitHub repository search and verified curated collections; inspect the real `SKILL.md` before installing.
+- Install from a GitHub URL, `owner/repo` or a folder inside a repository; import a local folder or `.zip`; no `npx skills` or Node dependency.
+- Enable/disable per skill (moved to a CLI-invisible stash, never deleted), automatic invocation, manual-only mode, categories, update from source, project vs global scope.
+- Skills reach the model for real: automatic selection composes `/skill-name` invocations, and an inline adapter covers models without native skill support.
+- Validation and safety: structure checks, suspicious-instruction findings, no script execution, traversal-safe archives, hash-checked updates. Details in [docs/skills.md](docs/skills.md).
 
 **Persistence**
 - Conversations, messages, tool state, usage and session ids stored as JSON under the app data folder.
@@ -203,8 +213,8 @@ Download from the [releases page](https://github.com/XiONDiGiTaL/fccGUI/releases
 
 | Artifact | Use |
 | --- | --- |
-| `FCC-Desktop-Setup-1.0.2.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
-| `FCC-Desktop-Portable-1.0.2.exe` | Single portable executable, no install — run it from anywhere. |
+| `FCC-Desktop-Setup-1.0.4.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
+| `FCC-Desktop-Portable-1.0.4.exe` | Single portable executable, no install — run it from anywhere. |
 
 Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on first launch. Click **More info → Run anyway**. The build is reproducible from source with `npm run dist` (see [Building installers](#building-installers)).
 
@@ -266,6 +276,21 @@ Set the mode in Settings → Agent. Use a restrictive mode when you want the age
 - **Workspace** — the agent's working directory (`cwd`) for a conversation. Shown in the chat header and composer; click it to reveal the folder.
 - **Additional directories** — extra paths passed with `--add-dir` for every conversation (Settings → Agent).
 - **Attachments** — paperclip or folder button, or drop files onto the composer. Images show thumbnails. Each attachment is described in the prompt and its directory is added to the agent's accessible roots. Remove a chip before sending to drop it.
+
+---
+
+## Agent Skills
+
+Skills are specialised instruction packs (`SKILL.md` + references, scripts and assets) that an agent loads when a task
+matches. FCC manages them end to end and feeds them into the same Claude Code process that runs your conversations.
+
+- **Discover** — search skills.sh, GitHub repositories or curated collections; filter by one of 80+ categories; inspect the actual `SKILL.md`, bundled files and safety findings before installing.
+- **Install** — paste a GitHub URL or `owner/name`, pick skills from the parsed listing, and choose global or project scope. Private repositories work when `gh auth login` has been used. Local folders and `.zip` archives import too.
+- **Manage** — enable/disable per skill, turn automatic invocation off for a skill (manual only), assign a category, update from its source repository, open the folder or repository, remove FCC-installed skills. Disabling moves the folder to `.fcc-disabled/` so Claude Code stops seeing it; it is never deleted.
+- **Use** — the active model sees enabled skills through Claude Code's native registry, and FCC selects the relevant ones for each message (or you pick them with the **Skills** button or `/skill-name`). The header chip shows what was applied, whether it was automatic, and why.
+- **Switch delivery** — *Native* lets the CLI load `SKILL.md` on demand; *Inline* pastes the selected instructions into the prompt with a budget, for models or CLI builds without native skills.
+
+Full documentation: **[docs/skills.md](docs/skills.md)** — architecture, security model, provider compatibility, writing your own skills and known limitations.
 
 ---
 
@@ -370,8 +395,8 @@ npm run dist:dir   # unpacked build only (fast smoke test)
 `electron-builder.yml` targets `nsis` and `portable` for x64, with the XiØN icon from `build/icon.png`. Output:
 
 ```
-release/FCC-Desktop-Setup-1.0.2.exe
-release/FCC-Desktop-Portable-1.0.2.exe
+release/FCC-Desktop-Setup-1.0.4.exe
+release/FCC-Desktop-Portable-1.0.4.exe
 release/win-unpacked/
 ```
 
@@ -407,8 +432,13 @@ Against a live FCC server on `127.0.0.1:8082` (`nvidia_nim`, 44 models) and Clau
 - Offline handling: explicit error message, sending disabled, automatic recovery when the endpoint returns.
 - Attachments: file metadata and thumbnails from main, chips in composer and message, persisted with the conversation.
 - Packaged build (`win-unpacked`) launching from `app.asar`, connecting, resuming the stored session and completing a turn.
+- Agent Skills: `skills.sh` search (40 results), a real GitHub download of `vercel-labs/agent-skills` (9 valid skills, 2 installed into a temp project), automatic selection of `vercel-react-best-practices` for a React performance prompt, and that composed prompt producing a grounded answer from Claude Code `2.1.330`.
+- Agent Skills delivery: a marker skill installed in a project was loaded natively through the `Skill` tool with no permission denial, including under a restricted `--allowedTools` list; with no skill installed at all, the inline adapter applied the same marker.
+- Agent Skills engine: `npm run test:skills` — 29 passing cases covering parsing, validation, safety findings, tar/zip traversal, store toggling, scoring, both delivery modes, and the service-level install/toggle/remove/isolation paths.
 
 Not exercised in this pass:
+
+- The Skills view itself was not clicked through in a running window (the data layer and CLI integration were verified directly; the UI compiled and was reviewed by inspection).
 
 - The Start/Stop server buttons (an externally managed FCC server was live and must not be disturbed). The code path only tracks app-owned processes.
 - Selecting files inside the native Windows picker (the dialog opens with the right title and filters, and the selection pipeline was validated through the IPC layer).

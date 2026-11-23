@@ -62,6 +62,29 @@ const bridge: FccBridge = {
       }
     },
   },
+  skills: {
+    catalog: (input) => ipcRenderer.invoke('skills:catalog', input ?? {}),
+    detail: (id, projectPath) => ipcRenderer.invoke('skills:detail', id, projectPath ?? null),
+    setEnabled: (id, enabled, projectPath, confirmExternal) =>
+      ipcRenderer.invoke('skills:setEnabled', id, enabled, projectPath ?? null, Boolean(confirmExternal)),
+    setAutoInvoke: (id, auto, projectPath) => ipcRenderer.invoke('skills:setAutoInvoke', id, auto, projectPath ?? null),
+    setCategory: (id, category, projectPath) => ipcRenderer.invoke('skills:setCategory', id, category, projectPath ?? null),
+    remove: (id, projectPath) => ipcRenderer.invoke('skills:remove', id, projectPath ?? null),
+    update: (id, projectPath) => ipcRenderer.invoke('skills:update', id, projectPath ?? null),
+    inspectRepo: (ref) => ipcRenderer.invoke('skills:inspectRepo', ref),
+    installRepo: (input) => ipcRenderer.invoke('skills:installRepo', input),
+    importLocal: (input) => ipcRenderer.invoke('skills:importLocal', input),
+    importZip: (input) => ipcRenderer.invoke('skills:importZip', input),
+    discover: (input) => ipcRenderer.invoke('skills:discover', input),
+    categories: () => ipcRenderer.invoke('skills:categories'),
+    pickImportFolder: () => ipcRenderer.invoke('skills:pickImportFolder'),
+    pickImportArchive: () => ipcRenderer.invoke('skills:pickImportArchive'),
+    onChanged: (cb) => {
+      const listener = () => cb()
+      ipcRenderer.on('skills:changed', listener)
+      return () => ipcRenderer.removeListener('skills:changed', listener)
+    },
+  },
   conversations: {
     list: () => ipcRenderer.invoke('conversations:list'),
     get: (id: string) => ipcRenderer.invoke('conversations:get', id),

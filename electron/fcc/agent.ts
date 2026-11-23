@@ -14,10 +14,47 @@ import { getSettings } from '../core/settings'
 import { getProxyToken } from '../core/secrets'
 import { log, redact } from '../core/logger'
 import { resolveTool } from './discovery'
+import { skillsService } from '../skills/service'
 import type { ConnectionManager } from './connection'
 
 const MAX_TOOL_OUTPUT = 24000
 const MAX_DIRS = 12
+/** Provider timeouts are retried in place once per turn, never more. */
+const MAX_PROVIDER_RETRIES = 1
+/**
+ * The CLI asks for 128k output tokens by default, which the gateway clamps to
+ * ~82k. On a large slow model that is a long turn per call, so cap it: shorter
+ * turns fail less and recover faster. Reasoning models count thinking against
+ * this budget, so it must stay well clear of a normal long answer: 16k could
+ * end a deep turn with stop_reason=max_tokens mid-response, 32k leaves room for
+ * thinking plus a full write-up.
+ */
+const MAX_OUTPUT_TOKENS = '32000'
+/**
+ * The retry never replays the user's text: the CLI records every message it
+ * receives, so resending the prompt would store and send it twice. A neutral
+ * continuation keeps the transcript and the request payload clean.
+ */
+const RETRY_PROMPT = 'Continue.'
+
+const PROVIDER_FAILURE_PATTERNS = [
+  /provider api request failed/i,
+  /provider exception/i,
+  /request timed out/i,
+  /\breadtimeout\b|\btimeouterror\b/i,
+  /deadline exceeded/i,
+  /api error:\s*5\d\d/i,
+  /\bstatus(?:\s*code)?:?\s*5\d\d\b/i,
+  /overloaded_error/i,
+  /upstream (?:error|timeout|failure|request failed)/i,
+]
+
+/** True when the text describes a transient upstream failure, not a real answer. */
+function looksLikeProviderFailure(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  return PROVIDER_FAILURE_PATTERNS.some((pattern) => pattern.test(trimmed))
+}
 
 interface ToolAccumulator {
   id: string
@@ -43,6 +80,12 @@ interface Session {
   toolByMessage: Map<string, Map<number, ToolAccumulator>>
   endedTurns: Set<string>
   idleTimer: NodeJS.Timeout | null
+  /** Number of automatic provider retries already spent on this turn. */
+  turnAttempts: number
+  turnHadOutput: boolean
+  turnText: string
+  /** Skills revision this process was started with; a change restarts it. */
+  skillRevision: number
 }
 
 function isDirectory(path: string): boolean {
@@ -164,7 +207,17 @@ export class AgentManager {
     }
 
     const model = input.model.trim()
-    const prompt = buildPrompt(input.text, attachments)
+
+    // Skills are resolved before the process is considered: enabling or
+    // disabling one changes what the CLI's own registry can see, so the skill
+    // revision is part of the process shape.
+    const plan = skillsService.planTurn({
+      text: input.text,
+      projectPath: cwd,
+      manual: input.skillNames ?? [],
+    })
+    const prompt = buildPrompt(plan.prompt?.prompt ?? input.text, attachments)
+    const skillRevision = skillsService.revision()
 
     // Reuse the live process when the shape matches; otherwise restart it while
     // preserving the Claude session id so the conversation keeps its context.
@@ -173,6 +226,7 @@ export class AgentManager {
       session &&
       session.model === model &&
       session.cwd === cwd &&
+      session.skillRevision === skillRevision &&
       session.dirs.length === dirs.length &&
       session.dirs.every((dir, index) => dir === dirs[index])
 
@@ -199,6 +253,15 @@ export class AgentManager {
     session.busy = true
     session.cancelled = false
 
+    this.emit({
+      type: 'skills-active',
+      conversationId,
+      turnId: input.turnId,
+      invocations: plan.invocations,
+      delivery: plan.delivery,
+      notes: plan.notes,
+    })
+
     const line = JSON.stringify({
       type: 'user',
       message: { role: 'user', content: [{ type: 'text', text: prompt }] },
@@ -210,6 +273,10 @@ export class AgentManager {
       session.busy = false
       throw new Error(`Could not write to the agent process: ${String(error)}`)
     }
+
+    session.turnAttempts = 0
+    session.turnHadOutput = false
+    session.turnText = ''
 
     return {
       turnId: input.turnId,
@@ -323,6 +390,7 @@ export class AgentManager {
         ANTHROPIC_BASE_URL: baseUrl,
         ANTHROPIC_AUTH_TOKEN: token,
         CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: MAX_OUTPUT_TOKENS,
         DISABLE_TELEMETRY: '1',
       },
     })
@@ -345,6 +413,10 @@ export class AgentManager {
       toolByMessage: new Map(),
       endedTurns: new Set(),
       idleTimer: null,
+      turnAttempts: 0,
+      turnHadOutput: false,
+      turnText: '',
+      skillRevision: skillsService.revision(),
     }
 
     let buffer = ''
@@ -510,6 +582,7 @@ export class AgentManager {
           const block = (event.content_block ?? {}) as Record<string, unknown>
           const blockType = String(block.type ?? 'text')
           if (blockType === 'tool_use') {
+            session.turnHadOutput = true
             const toolId = String(block.id ?? '')
             const name = String(block.name ?? 'tool')
             const map = this.toolsFor(session, apiMessageId)
@@ -545,6 +618,7 @@ export class AgentManager {
           const index = Number(event.index ?? 0)
           const delta = (event.delta ?? {}) as Record<string, unknown>
           if (typeof delta.text === 'string' && delta.text) {
+            session.turnText += delta.text
             this.emit({
               type: 'text-delta',
               conversationId: session.conversationId,
@@ -554,6 +628,7 @@ export class AgentManager {
               text: delta.text,
             })
           } else if (typeof delta.thinking === 'string' && delta.thinking) {
+            session.turnHadOutput = true
             this.emit({
               type: 'thinking-delta',
               conversationId: session.conversationId,
@@ -606,6 +681,7 @@ export class AgentManager {
         } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
           blocks.push({ kind: 'thinking', text: block.thinking })
         } else if (block.type === 'tool_use') {
+          session.turnHadOutput = true
           blocks.push({
             kind: 'tool',
             id: String(block.id ?? ''),
@@ -649,6 +725,42 @@ export class AgentManager {
       const usage = (parsed.usage ?? {}) as Record<string, unknown>
       const isError = Boolean(parsed.is_error) || String(parsed.subtype ?? '') !== 'success'
       const denials = Array.isArray(parsed.permission_denials) ? parsed.permission_denials.length : 0
+      const resultText = typeof parsed.result === 'string' ? parsed.result : ''
+
+      // A transient provider failure that produced nothing useful is replayed
+      // once in the same turn, so the UI never shows a failed turn for it.
+      if (turnId && this.shouldRetryProviderFailure(session, isError, resultText)) {
+        const retryLine = JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: RETRY_PROMPT }] },
+        })
+        session.turnAttempts = MAX_PROVIDER_RETRIES
+        session.turnText = ''
+        session.turnHadOutput = false
+        try {
+          session.proc.stdin?.write(`${retryLine}\n`)
+          log.warn('agent', `Provider failure on ${session.conversationId} — retrying the turn once`)
+          this.emit({ type: 'turn-retry', conversationId: session.conversationId, turnId, reason: 'provider' })
+          this.emit({
+            type: 'status',
+            conversationId: session.conversationId,
+            turnId,
+            phase: 'thinking',
+            detail: 'retrying after a provider timeout',
+          })
+          return
+        } catch (error) {
+          log.warn('agent', `Automatic retry could not be sent: ${String(error)}`)
+          this.emit({
+            type: 'error',
+            conversationId: session.conversationId,
+            turnId,
+            message: 'The provider request failed and the automatic retry could not reach the agent.',
+            detail: resultText.slice(0, 400) || undefined,
+          })
+        }
+      }
+
       if (turnId && !session.endedTurns.has(turnId)) {
         session.endedTurns.add(turnId)
         session.busy = false
@@ -671,6 +783,20 @@ export class AgentManager {
       this.scheduleIdleShutdown(session)
       return
     }
+  }
+
+  /**
+   * Retry only when the turn failed for a transient upstream reason and had
+   * produced no real output yet: no tool calls, and no text except the error
+   * message itself.
+   */
+  private shouldRetryProviderFailure(session: Session, isError: boolean, resultText: string): boolean {
+    if (!isError || session.cancelled) return false
+    if (session.turnAttempts >= MAX_PROVIDER_RETRIES) return false
+    if (session.turnHadOutput) return false
+    const text = session.turnText.trim()
+    if (text && !looksLikeProviderFailure(text)) return false
+    return looksLikeProviderFailure(resultText) || looksLikeProviderFailure(text)
   }
 
   /** Release the agent process after a long idle period; the session resumes from disk. */

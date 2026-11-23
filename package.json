@@ -1,7 +1,7 @@
 {
   "name": "fcc-desktop",
   "productName": "FCC Desktop",
-  "version": "1.0.2",
+  "version": "1.0.4",
   "description": "A XiON desktop environment for Free Claude Code (FCC)",
   "author": {
     "name": "XiON",
@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "start": "electron .",
     "dist": "npm run build && electron-builder --win",
-    "dist:dir": "npm run build && electron-builder --win --dir"
+    "dist:dir": "npm run build && electron-builder --win --dir",
+    "test:skills": "node scripts/test-skills.mjs"
   },
   "dependencies": {},
   "devDependencies": {

@@ -29,6 +29,8 @@ interface SidebarProps {
   status: ConnectionStatus | null
   onOpenSettings: () => void
   collapsed: boolean
+  onOpenSkills: () => void
+  skillsCount: number
 }
 
 export default function Sidebar({
@@ -47,6 +49,8 @@ export default function Sidebar({
   status,
   onOpenSettings,
   collapsed,
+  onOpenSkills,
+  skillsCount,
 }: SidebarProps) {
   const [hovered, setHovered] = useState<string | null>(null)
 
@@ -82,6 +86,9 @@ export default function Sidebar({
           </IconButton>
           <IconButton label="Workspaces" onClick={onAddWorkspace}>
             <FolderIcon size={17} />
+          </IconButton>
+          <IconButton label={`Agent skills (${skillsCount})`} onClick={onOpenSkills}>
+            <SparkIcon size={17} />
           </IconButton>
           <div className="rail-grow" />
           <IconButton label={`FCC: ${statusLabel(status)}`} onClick={onOpenSettings}>
@@ -178,6 +185,17 @@ export default function Sidebar({
             </div>
           ))
         )}
+
+        <button className="skills-entry" onClick={onOpenSkills}>
+          <span className="skills-entry-icon">
+            <SparkIcon size={15} />
+          </span>
+          <span className="skills-entry-copy">
+            <span className="skills-entry-title">Agent Skills</span>
+            <span className="skills-entry-sub">Discover, install, enable</span>
+          </span>
+          <span className="skills-entry-count">{skillsCount}</span>
+        </button>
 
         <div className="sidebar-section-head spaced">
           <span>Workspaces</span>

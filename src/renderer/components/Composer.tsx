@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Attachment, ConnectionStatus, ModelInfo } from '../../shared/types'
+import type { SkillSummary } from '../../shared/skills'
 import { formatBytes, folderName } from '../lib/format'
 import ModelPicker from './ModelPicker'
 import MessageQueue, { type QueuedMessage } from './MessageQueue'
 import { Badge, Button, IconButton } from './ui'
+import SkillPicker from './SkillPicker'
 import {
   CloseIcon,
   FileIcon,
@@ -12,6 +14,7 @@ import {
   PaperclipIcon,
   PlusIcon,
   SendIcon,
+  SparkIcon,
   StopIcon,
 } from './Icons'
 
@@ -36,6 +39,10 @@ interface ComposerProps {
   onClearWorkspace: () => void
   status: ConnectionStatus | null
   onOpenSettings: () => void
+  skills: SkillSummary[]
+  selectedSkills: string[]
+  onToggleSkill: (name: string) => void
+  onOpenSkillsLibrary: () => void
   queue: QueuedMessage[]
   onQueue: () => void
   onQueueEdit: (id: string, text: string) => void
@@ -109,6 +116,10 @@ export default function Composer({
   onClearWorkspace,
   status,
   onOpenSettings,
+  skills,
+  selectedSkills,
+  onToggleSkill,
+  onOpenSkillsLibrary,
   queue,
   onQueue,
   onQueueEdit,
@@ -116,7 +127,9 @@ export default function Composer({
   onQueueSendNow,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const offline = status?.state !== 'connected'
+  const enabledSkills = skills.filter((skill) => skill.enabled).length
 
   useEffect(() => {
     const element = textareaRef.current
@@ -136,6 +149,20 @@ export default function Composer({
       />
 
       <div className="composer">
+        {selectedSkills.length > 0 ? (
+          <div className="composer-skills">
+            {selectedSkills.map((name) => (
+              <span key={name} className="skill-chip is-selected" title={`Invoke /${name} for this message`}>
+                <SparkIcon size={11} />
+                <span>/{name}</span>
+                <button onClick={() => onToggleSkill(name)} aria-label={`Remove ${name}`}>
+                  <CloseIcon size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
         {attachments.length > 0 ? (
           <div className="composer-atts">
             {attachments.map((attachment) => (
@@ -184,6 +211,15 @@ export default function Composer({
             <IconButton label="Attach a folder" onClick={onAddFolder}>
               <FolderIcon size={17} />
             </IconButton>
+            <button
+              className={`skills-chip-button ${selectedSkills.length > 0 ? 'is-active' : ''}`}
+              onClick={() => setPickerOpen(true)}
+              title="Choose skills for this message"
+            >
+              <SparkIcon size={14} />
+              <span>Skills{selectedSkills.length > 0 ? ` · ${selectedSkills.length}` : ''}</span>
+              <em>{enabledSkills}</em>
+            </button>
             <span className="composer-sep" />
             {workspace ? (
               <span className="workspace-chip" title={workspace}>
@@ -252,6 +288,18 @@ export default function Composer({
           <span className="composer-endpoint">{status?.baseUrl}</span>
         )}
       </div>
+
+      <SkillPicker
+        open={pickerOpen}
+        skills={skills}
+        selected={selectedSkills}
+        onClose={() => setPickerOpen(false)}
+        onToggle={onToggleSkill}
+        onOpenLibrary={() => {
+          setPickerOpen(false)
+          onOpenSkillsLibrary()
+        }}
+      />
     </div>
   )
 }

@@ -35,6 +35,7 @@ import {
   updateConversation,
 } from './core/conversations'
 import { detectTools } from './fcc/discovery'
+import { skillsService } from './skills/service'
 import type { ConnectionManager } from './fcc/connection'
 import type { AgentManager } from './fcc/agent'
 import { log, logTail } from './core/logger'
@@ -183,6 +184,137 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
   })
 
   ipcMain.handle('secrets:clearProxyToken', () => clearProxyToken())
+
+  // ------------------------------------------------------------------ skills
+  const projectOf = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim() && isAbsolute(value) ? normalize(value.trim()) : null
+  const textOf = (value: unknown, max = 2048): string | null =>
+    typeof value === 'string' && value.trim().length > 0 && value.length <= max ? value.trim() : null
+  const scopeOf = (value: unknown): 'global' | 'project' => (value === 'project' ? 'project' : 'global')
+
+  ipcMain.handle('skills:catalog', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as { projectPath?: unknown; refresh?: unknown }
+    return skillsService.catalog(projectOf(record.projectPath), Boolean(record.refresh))
+  })
+
+  ipcMain.handle('skills:detail', (_event, id: unknown, projectPath: unknown) => {
+    const skillId = textOf(id, 128)
+    return skillId ? skillsService.detail(skillId, projectOf(projectPath)) : null
+  })
+
+  ipcMain.handle('skills:setEnabled', (_event, id: unknown, enabled: unknown, projectPath: unknown, confirm: unknown) => {
+    const skillId = textOf(id, 128)
+    if (!skillId) throw new Error('Unknown skill.')
+    return skillsService.setEnabled(skillId, Boolean(enabled), projectOf(projectPath), Boolean(confirm))
+  })
+
+  ipcMain.handle('skills:setAutoInvoke', (_event, id: unknown, auto: unknown, projectPath: unknown) => {
+    const skillId = textOf(id, 128)
+    if (!skillId) throw new Error('Unknown skill.')
+    return skillsService.setAutoInvoke(skillId, Boolean(auto), projectOf(projectPath))
+  })
+
+  ipcMain.handle('skills:setCategory', (_event, id: unknown, category: unknown, projectPath: unknown) => {
+    const skillId = textOf(id, 128)
+    if (!skillId) throw new Error('Unknown skill.')
+    return skillsService.setCategory(skillId, textOf(category, 80), projectOf(projectPath))
+  })
+
+  ipcMain.handle('skills:remove', (_event, id: unknown, projectPath: unknown) => {
+    const skillId = textOf(id, 128)
+    if (!skillId) throw new Error('Unknown skill.')
+    return skillsService.remove(skillId, projectOf(projectPath))
+  })
+
+  ipcMain.handle('skills:update', (_event, id: unknown, projectPath: unknown) => {
+    const skillId = textOf(id, 128)
+    if (!skillId) throw new Error('Unknown skill.')
+    return skillsService.update(skillId, projectOf(projectPath))
+  })
+
+  ipcMain.handle('skills:inspectRepo', (_event, ref: unknown) => {
+    const value = textOf(ref, 512)
+    if (!value) return { repo: '', ref: '', url: '', entries: [], error: 'Enter a repository first.' }
+    return skillsService.inspectRepo(value)
+  })
+
+  ipcMain.handle('skills:installRepo', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+    const ref = textOf(record.ref, 512)
+    if (!ref) throw new Error('Enter a GitHub repository or URL.')
+    const paths = Array.isArray(record.paths)
+      ? record.paths.filter((entry): entry is string => typeof entry === 'string').slice(0, 40)
+      : []
+    return skillsService.installFromRepo({
+      ref,
+      paths,
+      scope: scopeOf(record.scope),
+      projectPath: projectOf(record.projectPath),
+    })
+  })
+
+  ipcMain.handle('skills:importLocal', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+    const paths = Array.isArray(record.paths)
+      ? record.paths.filter((entry): entry is string => typeof entry === 'string' && isAbsolute(entry)).slice(0, 20)
+      : []
+    if (paths.length === 0) throw new Error('Choose a skill folder first.')
+    return skillsService.importLocal({
+      paths,
+      scope: scopeOf(record.scope),
+      projectPath: projectOf(record.projectPath),
+    })
+  })
+
+  ipcMain.handle('skills:importZip', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+    const path = textOf(record.path, 1024)
+    if (!path || !isAbsolute(path)) throw new Error('Choose a .zip archive first.')
+    return skillsService.importZip({
+      path,
+      scope: scopeOf(record.scope),
+      projectPath: projectOf(record.projectPath),
+    })
+  })
+
+  ipcMain.handle('skills:discover', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
+    const source = record.source === 'github' || record.source === 'curated' ? record.source : 'skills.sh'
+    return skillsService.discover({
+      source,
+      query: typeof record.query === 'string' ? record.query.slice(0, 200) : '',
+      category: typeof record.category === 'string' ? record.category.slice(0, 80) : null,
+      limit: typeof record.limit === 'number' ? Math.min(60, Math.max(5, Math.round(record.limit))) : undefined,
+    })
+  })
+
+  ipcMain.handle('skills:categories', () => skillsService.categories())
+
+  ipcMain.handle('skills:pickImportFolder', async (event): Promise<string[]> => {
+    const win = windowOf(event) ?? getWindow()
+    const result = await openDialog(win, {
+      title: 'Choose a skill folder',
+      properties: ['openDirectory', 'multiSelections'],
+    })
+    if (result.canceled) return []
+    return result.filePaths.map((path) => normalize(path))
+  })
+
+  ipcMain.handle('skills:pickImportArchive', async (event): Promise<string | null> => {
+    const win = windowOf(event) ?? getWindow()
+    const result = await openDialog(win, {
+      title: 'Choose a skill archive',
+      properties: ['openFile'],
+      filters: [{ name: 'Skill archive', extensions: ['zip'] }],
+    })
+    if (result.canceled || !result.filePaths[0]) return null
+    return normalize(result.filePaths[0])
+  })
+
+  const offSkills = skillsService.onChange(() => {
+    getWindow()?.webContents.send('skills:changed')
+  })
+  app.once('will-quit', () => offSkills())
 
   // -------------------------------------------------------------- connection
   ipcMain.handle('connection:status', (): ConnectionStatus => connection.current())

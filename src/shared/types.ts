@@ -3,6 +3,19 @@
  * Nothing here may contain secrets: this module is bundled into the renderer.
  */
 
+import type {
+  DiscoveryResult,
+  InstalledSkillResult,
+  SkillCatalog,
+  SkillCategory,
+  SkillDetail,
+  SkillInvocation,
+  SkillRepoListing,
+  SkillUpdateResult,
+  SkillsConfig,
+  SkillsState,
+} from './skills'
+
 export const APP_NAME = 'FCC Desktop'
 export const APP_ID = 'net.xiondigital.fccdesktop'
 
@@ -53,6 +66,8 @@ export interface AppSettings {
   version: number
   connection: ConnectionConfig
   agent: AgentConfig
+  /** Agent Skills: master switch, automatic selection and adapter mode. */
+  skills: SkillsConfig
   ui: UiConfig
   workspaces: Workspace[]
 }
@@ -232,6 +247,8 @@ export interface SendPromptInput {
   workingDirectory: string
   additionalDirs: string[]
   resumeSessionId: string | null
+  /** Skill names the user picked for this turn, on top of automatic selection. */
+  skillNames?: string[]
 }
 
 export interface SendPromptResult {
@@ -306,6 +323,17 @@ export type AgentEvent =
       inputTokens: number | null
       outputTokens: number | null
       permissionDenials: number
+    }
+  /** The failed attempt is being replayed silently; discard its partial output. */
+  | { type: 'turn-retry'; conversationId: string; turnId: string; reason: string }
+  /** Which installed skills guide this turn, and how their instructions were delivered. */
+  | {
+      type: 'skills-active'
+      conversationId: string
+      turnId: string
+      invocations: SkillInvocation[]
+      delivery: 'native' | 'inline' | 'none'
+      notes: string[]
     }
   | {
       type: 'status'
@@ -384,6 +412,38 @@ export interface FccBridge {
     thumbnail(path: string): Promise<string | null>
     reveal(path: string): Promise<boolean>
     pathForFile(file: File): string
+  }
+  skills: {
+    catalog(input?: { projectPath?: string | null; refresh?: boolean }): Promise<SkillCatalog>
+    detail(id: string, projectPath?: string | null): Promise<SkillDetail | null>
+    setEnabled(id: string, enabled: boolean, projectPath?: string | null, confirmExternal?: boolean): Promise<SkillsState>
+    setAutoInvoke(id: string, auto: boolean, projectPath?: string | null): Promise<SkillsState>
+    setCategory(id: string, category: string | null, projectPath?: string | null): Promise<SkillsState>
+    remove(id: string, projectPath?: string | null): Promise<SkillsState>
+    update(id: string, projectPath?: string | null): Promise<SkillUpdateResult>
+    inspectRepo(ref: string): Promise<SkillRepoListing>
+    installRepo(input: {
+      ref: string
+      paths?: string[]
+      scope: 'global' | 'project'
+      projectPath?: string | null
+    }): Promise<InstalledSkillResult>
+    importLocal(input: {
+      paths: string[]
+      scope: 'global' | 'project'
+      projectPath?: string | null
+    }): Promise<InstalledSkillResult>
+    importZip(input: { path: string; scope: 'global' | 'project'; projectPath?: string | null }): Promise<InstalledSkillResult>
+    discover(input: {
+      source: 'skills.sh' | 'github' | 'curated'
+      query?: string
+      category?: string | null
+      limit?: number
+    }): Promise<DiscoveryResult>
+    categories(): Promise<SkillCategory[]>
+    pickImportFolder(): Promise<string[]>
+    pickImportArchive(): Promise<string | null>
+    onChanged(cb: () => void): () => void
   }
   conversations: {
     list(): Promise<ConversationSummary[]>

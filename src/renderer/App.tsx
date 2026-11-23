@@ -22,7 +22,10 @@ import Sidebar from './components/Sidebar'
 import ChatView from './components/ChatView'
 import Composer from './components/Composer'
 import SettingsPanel from './components/Settings'
+import SkillsView from './components/SkillsView'
 import ActivityRail from './components/ActivityRail'
+import type { ActiveSkillsState } from './components/ActiveSkills'
+import type { SkillSummary } from '../shared/skills'
 import { Button, Modal } from './components/ui'
 import { friendlyError } from './lib/format'
 
@@ -108,6 +111,12 @@ function projectEvent(conversation: Conversation, event: AgentEvent): ChatMessag
 
   switch (event.type) {
     case 'turn-start':
+      message.status = 'streaming'
+      return message
+    case 'turn-retry':
+      // The agent replayed the turn; its failed attempt left nothing to keep.
+      message.segments = []
+      message.error = undefined
       message.status = 'streaming'
       return message
     case 'message-start':
@@ -232,6 +241,10 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>({})
+  const [view, setView] = useState<'chat' | 'skills'>('chat')
+  const [skillList, setSkillList] = useState<SkillSummary[]>([])
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([])
+  const [skillsByConversation, setSkillsByConversation] = useState<Record<string, ActiveSkillsState>>({})
 
   const cache = useRef(new Map<string, Conversation>())
   const activeIdRef = useRef<string | null>(null)
@@ -305,6 +318,18 @@ export default function App() {
 
   const handleEvent = useCallback(
     (event: AgentEvent) => {
+      if (event.type === 'skills-active') {
+        setSkillsByConversation((current) => ({
+          ...current,
+          [event.conversationId]: {
+            turnId: event.turnId,
+            invocations: event.invocations,
+            delivery: event.delivery,
+            notes: event.notes,
+          },
+        }))
+        return
+      }
       const conversation = cache.current.get(event.conversationId)
       if (!conversation) return
       const touched = projectEvent(conversation, event)
@@ -361,6 +386,17 @@ export default function App() {
 
   eventHandler.current = handleEvent
 
+  const refreshSkills = useCallback(async () => {
+    const activeId = activeIdRef.current
+    const projectPath = activeId ? cache.current.get(activeId)?.workspacePath ?? null : null
+    try {
+      const catalog = await api.skills.catalog({ projectPath })
+      setSkillList(catalog.skills)
+    } catch (error) {
+      console.error('Could not load skills', error)
+    }
+  }, [])
+
   const openConversation = useCallback(async (id: string) => {
     const existing = cache.current.get(id)
     const conversation = existing ?? (await api.conversations.get(id))
@@ -383,8 +419,10 @@ export default function App() {
     setQueues(nextQueues)
 
     setActive({ ...conversation })
+    setView('chat')
     setDraft('')
     setAttachments([])
+    setSelectedSkills([])
     try {
       const info = await api.agent.runtime(id)
       setRuntime(info)
@@ -423,13 +461,19 @@ export default function App() {
     const offStatus = api.connection.onStatus((next) => setStatus(next))
     const offChanged = api.conversations.onChanged(() => void refreshSummaries())
     const offWindow = api.app.onWindowState((state) => setMaximized(state.maximized))
+    const offSkills = api.skills.onChanged(() => void refreshSkills())
     return () => {
       offAgent()
       offStatus()
       offChanged()
       offWindow()
+      offSkills()
     }
-  }, [refreshSummaries])
+  }, [refreshSkills, refreshSummaries])
+
+  useEffect(() => {
+    void refreshSkills()
+  }, [active?.workspacePath, refreshSkills])
 
   useEffect(() => {
     if (!toast) return
@@ -476,8 +520,10 @@ export default function App() {
         cache.current.set(conversation.id, conversation)
         activeIdRef.current = conversation.id
         setActive({ ...conversation })
+        setView('chat')
         setDraft('')
         setAttachments([])
+        setSelectedSkills([])
         setRuntime(null)
         setPhase('idle')
         await refreshSummaries()
@@ -706,7 +752,7 @@ export default function App() {
    * queue share this path so both behave identically.
    */
   const beginTurn = useCallback(
-    async (conversation: Conversation, text: string, turnAttachments: Attachment[]) => {
+    async (conversation: Conversation, text: string, turnAttachments: Attachment[], skillNames: string[] = []) => {
       const model = conversation.model || preferredModel(models, settings?.agent.defaultModel ?? '')
       const turnId = newId()
       const now = Date.now()
@@ -751,6 +797,7 @@ export default function App() {
           workingDirectory: conversation.workspacePath ?? settings?.agent.workingDirectory ?? '',
           additionalDirs: conversation.additionalDirs,
           resumeSessionId: conversation.sessionId,
+          skillNames,
         })
         if (result.sessionId && !conversation.sessionId) {
           conversation.sessionId = result.sessionId
@@ -793,10 +840,12 @@ export default function App() {
     }
 
     const sentAttachments = [...attachments]
+    const sentSkills = [...selectedSkills]
     setDraft('')
     setAttachments([])
-    await beginTurn(conversation, text, sentAttachments)
-  }, [active, attachments, beginTurn, draft, models, settings])
+    setSelectedSkills([])
+    await beginTurn(conversation, text, sentAttachments, sentSkills)
+  }, [active, attachments, beginTurn, draft, models, selectedSkills, settings])
 
   // ------------------------------------------------------------------- queue
   const setQueueFor = useCallback(
@@ -1013,9 +1062,28 @@ export default function App() {
           status={status}
           onOpenSettings={() => setSettingsOpen(true)}
           collapsed={sidebarCollapsed}
+          onOpenSkills={() => setView('skills')}
+          skillsCount={skillList.filter((skill) => skill.enabled).length}
         />
 
         <main className="workspace">
+          {view === 'skills' ? (
+            <div className="workspace-main skills-workspace">
+              <SkillsView
+                projectPath={active?.workspacePath ?? null}
+                workspaceName={
+                  active?.workspacePath
+                    ? active.workspacePath.split(/[\\/]/).filter(Boolean).pop() ?? null
+                    : null
+                }
+                onBack={() => setView('chat')}
+                onToast={(kind, text) => setToast({ kind, text })}
+                onOpenExternal={(url) => void api.app.openExternal(url)}
+                onSkillsChanged={() => void refreshSkills()}
+              />
+            </div>
+          ) : (
+            <>
           <div className="workspace-main">
             <ChatView
               conversation={active}
@@ -1034,6 +1102,9 @@ export default function App() {
               onOpenSettings={() => setSettingsOpen(true)}
               onRetry={retryFromMessage}
               workingDirectory={effectiveWorkingDirectory}
+              skillsState={active ? skillsByConversation[active.id] ?? null : null}
+              showSkillsIndicator={settings?.skills.showIndicator ?? true}
+              onOpenSkills={() => setView('skills')}
             />
 
             <Composer
@@ -1059,6 +1130,14 @@ export default function App() {
               onClearWorkspace={() => void setWorkspace(null)}
               status={status}
               onOpenSettings={() => setSettingsOpen(true)}
+              skills={skillList}
+              selectedSkills={selectedSkills}
+              onToggleSkill={(name) =>
+                setSelectedSkills((current) =>
+                  current.includes(name) ? current.filter((entry) => entry !== name) : [...current, name],
+                )
+              }
+              onOpenSkillsLibrary={() => setView('skills')}
               queue={active ? queues[active.id] ?? [] : []}
               onQueue={queueDraft}
               onQueueEdit={editQueued}
@@ -1078,6 +1157,8 @@ export default function App() {
               onClose={toggleActivity}
             />
           ) : null}
+            </>
+          )}
         </main>
       </div>
 

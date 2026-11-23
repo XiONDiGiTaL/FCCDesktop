@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { ConnectionStatus, Conversation, ModelInfo } from '../../shared/types'
 import { folderName, shortPath, statusLabel, toolLabel, toolSummary } from '../lib/format'
 import LiveActivity from './LiveActivity'
+import ActiveSkills, { type ActiveSkillsState } from './ActiveSkills'
 import MessageItem from './MessageItem'
 import SetupGuide from './SetupGuide'
 import { IconButton, StatusDot } from './ui'
@@ -24,6 +25,9 @@ interface ChatViewProps {
   onOpenSettings: () => void
   onRetry: (text: string) => void
   workingDirectory: string
+  skillsState: ActiveSkillsState | null
+  showSkillsIndicator: boolean
+  onOpenSkills: () => void
 }
 
 const SUGGESTIONS = [
@@ -58,6 +62,9 @@ export default function ChatView({
   onOpenSettings,
   onRetry,
   workingDirectory,
+  skillsState,
+  showSkillsIndicator,
+  onOpenSkills,
 }: ChatViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -198,6 +205,7 @@ export default function ChatView({
           </div>
         </div>
         <div className="chat-header-actions">
+          {showSkillsIndicator ? <ActiveSkills state={skillsState} onOpenSkills={onOpenSkills} /> : null}
           {streaming ? (
             <span className="live-pill">
               <LiveActivity phase={phase} startedAt={streamStartedAt} active compact />
