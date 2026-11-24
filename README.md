@@ -6,7 +6,7 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 
 ![FCC Desktop overview](docs/screenshots/overview.png)
 
-**[Download the latest build](https://github.com/XiONDiGiTaL/FCCDesktop/releases/latest)** · [Website](https://xiondigital.github.io/FCCDesktop/) · [Getting started](#getting-started) · [Build from source](#building-installers)
+**[Download the latest build](https://github.com/XiONDiGiTaL/FCCDesktop/releases/latest)** · [Website](https://xiondigital.net/FCCDesktop/) · [Getting started](#getting-started) · [Build from source](#building-installers)
 
 ---
 
