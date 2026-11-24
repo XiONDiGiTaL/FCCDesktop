@@ -76,61 +76,57 @@
         </ul>
       </div>
 
-      <figure class="hero__screen" aria-label="FCC Desktop usage view illustration">
-        <div class="app">
-          <div class="app__bar">
-            <span class="app__dots"><i></i><i></i><i></i></span>
-            <span class="app__title">FCC Desktop — Usage &amp; limits</span>
-            <span class="app__conn"><i class="dot dot--live"></i>Connected</span>
-          </div>
-          <div class="app__body">
-            <aside class="app__side" aria-hidden="true">
-              <span class="app__side-item">Chat</span>
-              <span class="app__side-item">Skills</span>
-              <span class="app__side-item">Local models</span>
-              <span class="app__side-item is-active">Usage &amp; limits</span>
-              <span class="app__side-item">Settings</span>
-              <span class="app__side-foot">fcc-server · 127.0.0.1:8082</span>
-            </aside>
-            <div class="app__main">
-              <div class="app__head">
-                <div>
-                  <span class="app__eyebrow">Provider usage</span>
-                  <strong class="app__h">Know what is left before the wall</strong>
-                </div>
-                <span class="chip chip--live"><i class="dot dot--live"></i>Available</span>
-              </div>
-              <p class="app__sub">NVIDIA NIM · nvidia/nemotron-3-ultra</p>
-              <div class="app__grid">
-                <div class="mini">
-                  <span class="mini__label">Request attempts today</span>
-                  <strong class="mini__value">38</strong>
-                  <span class="mini__note">Locally tracked</span>
-                </div>
-                <div class="mini">
-                  <span class="mini__label">429s · 7 days</span>
-                  <strong class="mini__value">2</strong>
-                  <span class="mini__note">Classified, not guessed</span>
-                </div>
-                <div class="mini">
-                  <span class="mini__label">Provider quota</span>
-                  <strong class="mini__value mini__value--muted">Not exposed</strong>
-                  <span class="mini__note">No public quota API</span>
-                </div>
-              </div>
-              <div class="app__chart">
-                <div class="app__chart-head"><span>Last 7 days</span><span>122 requests</span></div>
-                <div class="bars" aria-hidden="true">
-                  <span style="--h: 34%"></span><span style="--h: 52%"></span><span style="--h: 41%"></span>
-                  <span style="--h: 68%"></span><span style="--h: 47%"></span><span style="--h: 86%" class="is-warm"></span>
-                  <span style="--h: 59%"></span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <figcaption>Local counts stay labelled local. Provider quota is shown only when the provider reports it.</figcaption>
+      <figure class="hero__screen">
+        <img
+          class="shot"
+          src="assets/img/shot-usage.jpg"
+          alt="FCC Desktop 1.0.7 Usage and limits view: provider status available, provider quota not exposed, request attempts and 429 counts tracked locally"
+          width="1432"
+          height="919"
+        />
+        <figcaption>
+          Captured from the installed 1.0.7 build. Provider status is read from FCC; quota the provider does not
+          publish stays “Not exposed”.
+        </figcaption>
       </figure>
+    </section>
+
+    <section class="section wrap" id="screens">
+      <div class="section__head">
+        <p class="eyebrow"><span class="eyebrow__line"></span>Inside the app</p>
+        <h2 class="section__title">Screens, not mockups.</h2>
+        <p class="section__note">
+          Every image on this page is a capture of the 1.0.7 build running on Windows, connected to a local FCC
+          server, with no conversations or personal workspace data.
+        </p>
+      </div>
+
+      <div class="shots">
+        <figure class="shots__item">
+          <img
+            src="assets/img/shot-chat.jpg"
+            alt="FCC Desktop new-conversation screen with suggested prompts, composer, model picker and connection status"
+            width="1432"
+            height="919"
+            loading="lazy"
+          />
+          <figcaption>
+            <strong>Chat</strong> — the welcome state, live FCC connection, model picker and composer.
+          </figcaption>
+        </figure>
+        <figure class="shots__item">
+          <img
+            src="assets/img/shot-models.jpg"
+            alt="FCC Desktop Local models view with hardware profile, model folder, llama.cpp runtime, load settings and fitted GGUF recommendations"
+            width="1432"
+            height="919"
+            loading="lazy"
+          />
+          <figcaption>
+            <strong>Local models</strong> — hardware profile, fit labels, llama.cpp runtime and the GGUF index.
+          </figcaption>
+        </figure>
+      </div>
     </section>
 
     <section class="section wrap" id="release">
