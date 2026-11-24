@@ -143,7 +143,7 @@ FCC has a first-class llama.cpp provider (`LLAMACPP_BASE_URL`, model ids
   conversions) must be downloaded manually and dropped into the model folder.
 - Downloads are plain HTTPS with resume; there is no multi-connection
   acceleration and no checksum verification beyond file size.
-- The library manages GGUF files only — it is not an Ollama or LM Studio manager.
+- The library manages GGUF files only; it is not an Ollama or LM Studio manager.
 
 ## Verification
 

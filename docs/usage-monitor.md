@@ -65,7 +65,7 @@ Consequences for this dashboard:
 - Every 429 is a **report from a moment**, never a permanent state. A supplied `Retry-After` or reset time is
   authoritative and ends the current state at that time. Without one, only recency keeps it current: 90 seconds for
   throttling, **15 minutes** for a quota-exhaustion report. After that the observation remains visible as history with
-  its timestamp ("Quota exhaustion last reported 2h ago — no longer current"), and the status returns to the normal
+  its timestamp ("Quota exhaustion last reported 2h ago, no longer current"), and the status returns to the normal
   configured/available state. An old 429 is therefore never shown as the live provider state forever.
 
 The same capability layer reports the equivalent limitation for other providers. OpenRouter's `/api/v1/key` exists but
@@ -76,7 +76,7 @@ have no account quota.
 
 - **On start / first probe:** the monitor starts before FCC's first connection probe, so it does not read while the
   probe is still running (that would only record "offline"). It reads provider metadata as soon as the connection
-  reports `connected`, and again after any disconnect → reconnect — including an FCC server this app starts itself.
+  reports `connected`, and again after any disconnect → reconnect, including an FCC server this app starts itself.
   Repeated `connected` statuses from the 15-second connection poll are ignored, so they cause no extra reads. A
   disconnect is also reflected immediately instead of at the next usage poll.
 - **After a turn:** a throttled refresh 3 seconds later (minimum 10 seconds between reads).
