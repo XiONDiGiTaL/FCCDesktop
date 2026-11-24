@@ -1,10 +1,13 @@
 import { useMemo, useState } from 'react'
 import type { AppSettings, ConnectionStatus, ConversationSummary } from '../../shared/types'
+import type { UsageState } from '../../shared/usage'
 import { dayGroup, folderName, relativeTime, statusLabel } from '../lib/format'
 import { IconButton, StatusDot } from './ui'
 import {
+  ChipIcon,
   FolderIcon,
   FolderPlusIcon,
+  GaugeIcon,
   PinIcon,
   PlusIcon,
   SearchIcon,
@@ -31,6 +34,27 @@ interface SidebarProps {
   collapsed: boolean
   onOpenSkills: () => void
   skillsCount: number
+  onOpenModels: () => void
+  onOpenUsage: () => void
+  usage: UsageState | null
+}
+
+function usageSubtitle(usage: UsageState | null): string {
+  if (!usage) return 'Reading provider…'
+  switch (usage.provider.availability) {
+    case 'available':
+      return 'Available · local counts'
+    case 'throttled':
+      return 'Temporarily rate-limited'
+    case 'exhausted':
+      return 'Quota exhausted'
+    case 'degraded':
+      return 'Provider needs attention'
+    case 'offline':
+      return 'FCC offline'
+    default:
+      return 'Usage not reported'
+  }
 }
 
 export default function Sidebar({
@@ -51,6 +75,9 @@ export default function Sidebar({
   collapsed,
   onOpenSkills,
   skillsCount,
+  onOpenModels,
+  onOpenUsage,
+  usage,
 }: SidebarProps) {
   const [hovered, setHovered] = useState<string | null>(null)
 
@@ -89,6 +116,16 @@ export default function Sidebar({
           </IconButton>
           <IconButton label={`Agent skills (${skillsCount})`} onClick={onOpenSkills}>
             <SparkIcon size={17} />
+          </IconButton>
+          <IconButton label="Local models" onClick={onOpenModels}>
+            <ChipIcon size={17} />
+          </IconButton>
+          <IconButton
+            label={`Usage & limits: ${usageSubtitle(usage)}`}
+            onClick={onOpenUsage}
+            className={usage && usage.provider.availability !== 'available' ? 'usage-rail-alert' : ''}
+          >
+            <GaugeIcon size={17} />
           </IconButton>
           <div className="rail-grow" />
           <IconButton label={`FCC: ${statusLabel(status)}`} onClick={onOpenSettings}>
@@ -195,6 +232,33 @@ export default function Sidebar({
             <span className="skills-entry-sub">Discover, install, enable</span>
           </span>
           <span className="skills-entry-count">{skillsCount}</span>
+        </button>
+
+        <button className="skills-entry" onClick={onOpenModels}>
+          <span className="skills-entry-icon">
+            <ChipIcon size={15} />
+          </span>
+          <span className="skills-entry-copy">
+            <span className="skills-entry-title">Local models</span>
+            <span className="skills-entry-sub">Download & run GGUF</span>
+          </span>
+        </button>
+
+        <button className="skills-entry usage-entry" onClick={onOpenUsage}>
+          <span className="skills-entry-icon">
+            <GaugeIcon size={15} />
+          </span>
+          <span className="skills-entry-copy">
+            <span className="skills-entry-title">Usage & limits</span>
+            <span className="skills-entry-sub">{usageSubtitle(usage)}</span>
+          </span>
+          {usage && usage.provider.availability === 'exhausted' ? (
+            <span className="usage-entry-flag is-exhausted">LIMIT</span>
+          ) : usage && usage.provider.availability === 'throttled' ? (
+            <span className="usage-entry-flag">429</span>
+          ) : usage && usage.provider.availability === 'degraded' ? (
+            <span className="usage-entry-flag is-muted">KEY</span>
+          ) : null}
         </button>
 
         <div className="sidebar-section-head spaced">

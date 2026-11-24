@@ -13,6 +13,7 @@ import { log, redact } from '../core/logger'
 import { resolveTool } from './discovery'
 import { requestJson } from './http'
 import { fetchModels } from './models'
+import { localModelsService } from '../local/service'
 
 const PROBE_TIMEOUT = 3500
 const POLL_INTERVAL = 15000
@@ -26,6 +27,7 @@ export class ConnectionManager {
   private catalogBaseUrl = ''
   private serverLogs: string[] = []
   private onStatus: (status: ConnectionStatus) => void = () => {}
+  private watchers = new Set<(status: ConnectionStatus) => void>()
 
   constructor() {
     this.status = {
@@ -43,6 +45,17 @@ export class ConnectionManager {
 
   bind(onStatus: (status: ConnectionStatus) => void): void {
     this.onStatus = onStatus
+  }
+
+  /**
+   * Observe every published status. The usage monitor starts before the first
+   * probe, so it needs to learn when FCC actually becomes reachable.
+   */
+  watch(listener: (status: ConnectionStatus) => void): () => void {
+    this.watchers.add(listener)
+    return () => {
+      this.watchers.delete(listener)
+    }
   }
 
   baseUrl(): string {
@@ -65,6 +78,13 @@ export class ConnectionManager {
   private publish(status: ConnectionStatus): ConnectionStatus {
     this.status = status
     this.onStatus(status)
+    for (const watcher of [...this.watchers]) {
+      try {
+        watcher(this.current())
+      } catch (error) {
+        log.warn('fcc', `Connection watcher failed: ${String(error)}`)
+      }
+    }
     return status
   }
 
@@ -198,6 +218,8 @@ export class ConnectionManager {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
+          // Point FCC's built-in llama.cpp provider at the local model server.
+          ...localModelsService.fccEnv(),
           PORT: url.port || (url.protocol === 'https:' ? '443' : '80'),
           HOST: settings.connection.host,
           FCC_OPEN_BROWSER: '0',
@@ -312,6 +334,7 @@ export class ConnectionManager {
   dispose(): void {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    this.watchers.clear()
     if (this.owned) {
       this.killTree(this.owned)
       this.owned = null

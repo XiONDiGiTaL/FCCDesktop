@@ -95,8 +95,9 @@ Open **Agent Skills** in the sidebar (or the spark button in the composer).
 - name, description, category, source repository, version, install date, compatibility
 - FCC-managed vs “Claude Code” (installed outside FCC)
 - enabled/disabled, automatic-invocation state, bundled-script flag, warning count
+- **update state** — "update available" when the source repository's `SKILL.md` no longer matches what was installed, plus when it was last checked; a failed check shows on the card instead of silently claiming everything is current
 - per-skill actions: enable, auto-invoke, open repo, update from source, open folder, remove (FCC-installed only)
-- bulk *Enable shown* / *Disable shown* over the current filter
+- bulk *Enable shown* / *Disable shown* over the current filter, *Updates* filter, and a single **Update N** button that updates every skill with a pending change
 - detail panel: full `SKILL.md`, every bundled file with its role, parsed metadata, security findings,
   category assignment
 
@@ -231,7 +232,7 @@ Adding a delivery mechanism means a branch in `composePrompt`; the selection, va
 
 ## Verification and tests
 
-`npm run test:skills` bundles `tests/skills.test.ts` with esbuild and runs 29 `node:test` cases. The engine tests cover
+`npm run test:skills` bundles `tests/skills.test.ts` with esbuild and runs 32 `node:test` cases. The engine tests cover
 frontmatter parsing, validation, safety findings, symlink handling, tar/zip traversal, store scanning and toggling, and
 identity stability across scopes. The selection tests cover scoring, manual override, caps and both delivery modes. The
 service tests drive the real `SkillsService` (Electron stubbed, temp directories) through local import, disable/enable,
@@ -245,12 +246,14 @@ Verified live during implementation (against the real gateway and real repositor
 - the composed `/vercel-react-best-practices …` turn produced an answer grounded in that skill
 - a marker skill installed in a project was loaded natively (`Skill` tool, no permission denial) and applied
 - with no skill installed at all, the inline adapter still applied the same marker — proving the fallback path
+- update detection against the real repository: a clean install reported no update, a state file with a stale install hash reported `available: true`, `Update` replaced the folder and cleared the flag, and the next check stayed clean
 
 ## Known limitations
 
 - **No template library.** See below.
 - **Descriptions for skills.sh results** are not in the search API; open *Inspect* to read the real `SKILL.md`.
-- **Update checks are manual** (*Update from source*); there is no background polling yet.
+- **Update checks are automatic but not instant.** Global skills are checked about 30 s after launch and at most every six hours; project skills are checked when the Skills view opens for that workspace (throttled to ten minutes), plus **Check for updates** on demand. A repository is downloaded once per check, not once per skill.
+- **Local edits are not treated as upstream updates.** The comparison uses the hash recorded when the skill was installed, so editing an installed `SKILL.md` by hand is preserved — and `Update` will report “already up to date” rather than overwriting your change.
 - **External skills cannot be removed from FCC**, by design.
 - **The inline budget** (24 000 characters) trims long skills and says so in the chip; native mode has no such cap
   because the CLI loads only what it needs.

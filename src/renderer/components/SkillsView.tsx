@@ -72,7 +72,8 @@ export default function SkillsView({
   const [categories, setCategories] = useState<SkillCategory[]>([])
   const [tab, setTab] = useState<Tab>('installed')
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<'all' | 'enabled' | 'disabled'>('all')
+  const [filter, setFilter] = useState<'all' | 'enabled' | 'disabled' | 'updates'>('all')
+  const [checking, setChecking] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [detail, setDetail] = useState<SkillDetail | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -117,6 +118,28 @@ export default function SkillsView({
     setInstallScope(projectPath ? 'project' : 'global')
   }, [api.skills, projectPath, refresh])
 
+  // Compare installed GitHub skills with their sources when the view opens. The
+  // service throttles this, so revisiting the tab does not hammer GitHub.
+  useEffect(() => {
+    let cancelled = false
+    setChecking(true)
+    void api.skills
+      .checkUpdates({ projectPath })
+      .then((state) => {
+        if (cancelled) return
+        setCatalog((current) =>
+          current ? { ...current, skills: state.skills, settings: state.settings } : current,
+        )
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setChecking(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api.skills, projectPath])
+
   useEffect(() => {
     const off = api.skills.onChanged(() => {
       void refresh()
@@ -151,6 +174,7 @@ export default function SkillsView({
     return skills.filter((skill) => {
       if (filter === 'enabled' && !skill.enabled) return false
       if (filter === 'disabled' && skill.enabled) return false
+      if (filter === 'updates' && !skill.updateAvailable) return false
       if (!text) return true
       return [skill.name, skill.description, skill.category ?? '', skill.source?.repo ?? '', skill.version ?? '']
         .join(' ')
@@ -351,7 +375,50 @@ export default function SkillsView({
       if (result.ok) await refresh()
     })
 
+  const updateAll = () =>
+    run('update-all', async () => {
+      const targets = skills.filter((skill) => skill.updateAvailable)
+      let updated = 0
+      const failures: string[] = []
+      for (const skill of targets) {
+        try {
+          const result = await api.skills.update(skill.id, projectPath)
+          if (result.ok) updated += 1
+          else failures.push(skill.name)
+        } catch {
+          failures.push(skill.name)
+        }
+      }
+      await refresh()
+      setNotice({
+        tone: failures.length > 0 ? 'info' : 'success',
+        text: `Updated ${updated} skill${updated === 1 ? '' : 's'}${
+          failures.length > 0 ? `. Could not update: ${failures.join(', ')}` : '.'
+        }`,
+      })
+    })
+
+  const checkNow = () =>
+    run('check', async () => {
+      setChecking(true)
+      try {
+        const state = await api.skills.checkUpdates({ projectPath, force: true })
+        applyState(state)
+        const available = state.skills.filter((skill) => skill.updateAvailable).length
+        setNotice({
+          tone: 'info',
+          text:
+            available > 0
+              ? `${available} skill${available === 1 ? ' has' : 's have'} a newer version upstream.`
+              : 'All GitHub-sourced skills are up to date.',
+        })
+      } finally {
+        setChecking(false)
+      }
+    })
+
   const enabledCount = skills.filter((skill) => skill.enabled).length
+  const updateCount = skills.filter((skill) => skill.updateAvailable).length
   const detailOpen = Boolean(selected && detail)
 
   return (
@@ -369,11 +436,24 @@ export default function SkillsView({
           </p>
         </div>
         <div className="skills-head-actions">
-          <Button variant="ghost" onClick={onBack}>
-            Back to chat
+          {updateCount > 0 ? (
+            <Button
+              variant="primary"
+              icon={<RefreshIcon size={15} />}
+              onClick={() => void updateAll()}
+              disabled={busy === 'update-all'}
+            >
+              {busy === 'update-all' ? 'Updating…' : `Update ${updateCount}`}
+            </Button>
+          ) : null}
+          <Button variant="ghost" onClick={() => void checkNow()} disabled={checking || busy === 'check'}>
+            {checking ? 'Checking…' : 'Check for updates'}
           </Button>
           <Button icon={<RefreshIcon size={15} />} onClick={() => void refresh(true)} disabled={busy === 'refresh'}>
             Refresh
+          </Button>
+          <Button variant="ghost" onClick={onBack}>
+            Back to chat
           </Button>
         </div>
       </header>
@@ -462,6 +542,7 @@ export default function SkillsView({
                 { value: 'all' as const, label: 'All' },
                 { value: 'enabled' as const, label: 'Enabled' },
                 { value: 'disabled' as const, label: 'Disabled' },
+                { value: 'updates' as const, label: `Updates${updateCount ? ` (${updateCount})` : ''}` },
               ]}
               onChange={setFilter}
             />
@@ -509,6 +590,12 @@ export default function SkillsView({
                       {skill.origin === 'external' ? <Badge>Claude Code</Badge> : <Badge tone="green">FCC</Badge>}
                       {skill.version ? <Badge>{skill.version}</Badge> : null}
                       {!skill.enabled ? <Badge tone="amber">disabled</Badge> : null}
+                      {skill.updateAvailable ? <Badge tone="blue">update available</Badge> : null}
+                      {skill.updateError ? (
+                        <span className="skill-flag warn" title={skill.updateError}>
+                          <AlertIcon size={11} /> update check failed
+                        </span>
+                      ) : null}
                     </span>
                     <span className="skill-desc">{skill.description || 'No description in SKILL.md.'}</span>
                     <span className="skill-meta">
@@ -522,6 +609,7 @@ export default function SkillsView({
                         </span>
                       ) : null}
                       {skill.installedAt ? <span>installed {formatDate(skill.installedAt)}</span> : null}
+                      {skill.updateCheckedAt ? <span>checked {formatDate(skill.updateCheckedAt)}</span> : null}
                     </span>
                   </button>
                   <div className="skill-actions">

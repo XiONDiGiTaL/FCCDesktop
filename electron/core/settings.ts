@@ -2,6 +2,8 @@ import { log } from './logger'
 import { settingsPath } from './paths'
 import { readJson, writeJsonAtomic } from './atomic'
 import type { AppSettings, DeepPartial, Density, PermissionMode, Workspace } from '../../src/shared/types'
+import type { LocalConfig } from '../../src/shared/local'
+import { DEFAULT_USAGE_CONFIG, sanitizeUsageConfig } from '../../src/shared/usage'
 
 const PERMISSION_MODES: PermissionMode[] = ['bypassPermissions', 'acceptEdits', 'default', 'plan']
 
@@ -30,6 +32,19 @@ export const DEFAULT_SETTINGS: AppSettings = {
     manageExternal: false,
     showIndicator: true,
   },
+  local: {
+    storageDir: '',
+    port: 8080,
+    contextSize: 8192,
+    gpuLayers: 999,
+    backend: 'auto',
+    flashAttention: false,
+    threads: 0,
+    batchSize: 0,
+    keepModelInMemory: false,
+  },
+  // Provider usage monitoring is read-only metadata plus local request counts.
+  usage: DEFAULT_USAGE_CONFIG,
   ui: {
     fontScale: 1,
     density: 'comfortable',
@@ -110,6 +125,56 @@ export function sanitizeSettings(input: unknown): AppSettings {
       additionalDirs,
       showThinking: asBoolean(agent.showThinking, true),
     },
+    local: {
+      storageDir: asString((raw.local as Record<string, unknown> | undefined)?.storageDir, '').trim(),
+      port: Math.round(
+        asNumber(
+          (raw.local as Record<string, unknown> | undefined)?.port,
+          DEFAULT_SETTINGS.local.port,
+          1024,
+          65535,
+        ),
+      ),
+      contextSize: Math.round(
+        asNumber(
+          (raw.local as Record<string, unknown> | undefined)?.contextSize,
+          DEFAULT_SETTINGS.local.contextSize,
+          2048,
+          131072,
+        ),
+      ),
+      gpuLayers: Math.round(
+        asNumber(
+          (raw.local as Record<string, unknown> | undefined)?.gpuLayers,
+          DEFAULT_SETTINGS.local.gpuLayers,
+          0,
+          999,
+        ),
+      ),
+      backend: (() => {
+        const value = (raw.local as Record<string, unknown> | undefined)?.backend
+        return value === 'vulkan' || value === 'rocm' || value === 'metal' || value === 'cpu' ? value : 'auto'
+      })(),
+      flashAttention: asBoolean(
+        (raw.local as Record<string, unknown> | undefined)?.flashAttention,
+        DEFAULT_SETTINGS.local.flashAttention,
+      ),
+      threads: Math.round(
+        asNumber((raw.local as Record<string, unknown> | undefined)?.threads, DEFAULT_SETTINGS.local.threads, 0, 256),
+      ),
+      batchSize: Math.round(
+        asNumber(
+          (raw.local as Record<string, unknown> | undefined)?.batchSize,
+          DEFAULT_SETTINGS.local.batchSize,
+          0,
+          8192,
+        ),
+      ),
+      keepModelInMemory: asBoolean(
+        (raw.local as Record<string, unknown> | undefined)?.keepModelInMemory,
+        DEFAULT_SETTINGS.local.keepModelInMemory,
+      ),
+    },
     skills: {
       enabled: asBoolean(skills.enabled, DEFAULT_SETTINGS.skills.enabled),
       autoInvoke: asBoolean(skills.autoInvoke, DEFAULT_SETTINGS.skills.autoInvoke),
@@ -118,6 +183,7 @@ export function sanitizeSettings(input: unknown): AppSettings {
       manageExternal: asBoolean(skills.manageExternal, DEFAULT_SETTINGS.skills.manageExternal),
       showIndicator: asBoolean(skills.showIndicator, DEFAULT_SETTINGS.skills.showIndicator),
     },
+    usage: sanitizeUsageConfig(raw.usage),
     ui: {
       fontScale: asNumber(ui.fontScale, 1, 0.85, 1.3),
       density,
@@ -154,6 +220,8 @@ export function updateSettings(patch: DeepPartial<AppSettings>): AppSettings {
     connection: { ...base.connection, ...(patch.connection ?? {}) },
     agent: { ...base.agent, ...(patch.agent ?? {}) },
     skills: { ...base.skills, ...(patch.skills ?? {}) },
+    local: { ...base.local, ...((patch as { local?: Partial<LocalConfig> }).local ?? {}) },
+    usage: { ...base.usage, ...(patch.usage ?? {}) },
     ui: { ...base.ui, ...(patch.ui ?? {}) },
     workspaces: patch.workspaces !== undefined ? (patch.workspaces as Workspace[]) : base.workspaces,
   }

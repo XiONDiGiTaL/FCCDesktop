@@ -924,9 +924,9 @@ export default function SettingsPanel({
                   <LinkIcon size={14} />
                   xiondigital.net
                 </button>
-                <button className="link-row" onClick={() => void window.fcc.app.openExternal('https://github.com/XiONDiGiTaL/fccGUI')}>
+                <button className="link-row" onClick={() => void window.fcc.app.openExternal('https://github.com/XiONDiGiTaL/FCCDesktop')}>
                   <LinkIcon size={14} />
-                  github.com/XiONDiGiTaL/fccGUI
+                  github.com/XiONDiGiTaL/FCCDesktop
                 </button>
                 <button className="link-row" onClick={() => void window.fcc.app.openExternal('https://github.com/Alishahryar1/free-claude-code')}>
                   <LinkIcon size={14} />

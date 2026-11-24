@@ -6,6 +6,7 @@ import type {
   DeepPartial,
   FccBridge,
 } from '../src/shared/types'
+import type { UsageState } from '../src/shared/usage'
 
 const bridge: FccBridge = {
   app: {
@@ -71,6 +72,7 @@ const bridge: FccBridge = {
     setCategory: (id, category, projectPath) => ipcRenderer.invoke('skills:setCategory', id, category, projectPath ?? null),
     remove: (id, projectPath) => ipcRenderer.invoke('skills:remove', id, projectPath ?? null),
     update: (id, projectPath) => ipcRenderer.invoke('skills:update', id, projectPath ?? null),
+    checkUpdates: (input) => ipcRenderer.invoke('skills:checkUpdates', input ?? {}),
     inspectRepo: (ref) => ipcRenderer.invoke('skills:inspectRepo', ref),
     installRepo: (input) => ipcRenderer.invoke('skills:installRepo', input),
     importLocal: (input) => ipcRenderer.invoke('skills:importLocal', input),
@@ -116,6 +118,44 @@ const bridge: FccBridge = {
   },
   storage: {
     openDataFolder: () => ipcRenderer.invoke('storage:openDataFolder'),
+  },
+  usage: {
+    state: () => ipcRenderer.invoke('usage:state'),
+    refresh: () => ipcRenderer.invoke('usage:refresh'),
+    configure: (patch) => ipcRenderer.invoke('usage:configure', patch ?? {}),
+    clearHistory: () => ipcRenderer.invoke('usage:clearHistory'),
+    onChanged: (cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: UsageState) => cb(state)
+      ipcRenderer.on('usage:changed', listener)
+      return () => ipcRenderer.removeListener('usage:changed', listener)
+    },
+  },
+  local: {
+    state: () => ipcRenderer.invoke('local:state'),
+    catalog: (input) => ipcRenderer.invoke('local:catalog', input ?? {}),
+    download: (input) => ipcRenderer.invoke('local:download', input),
+    cancelDownload: (id) => ipcRenderer.invoke('local:cancelDownload', id),
+    clearDownloads: () => ipcRenderer.invoke('local:clearDownloads'),
+    removeModel: (path) => ipcRenderer.invoke('local:removeModel', path),
+    pickStorage: () => ipcRenderer.invoke('local:pickStorage'),
+    setStorage: (path) => ipcRenderer.invoke('local:setStorage', path),
+    installRuntime: () => ipcRenderer.invoke('local:installRuntime'),
+    removeRuntime: () => ipcRenderer.invoke('local:removeRuntime'),
+    startServer: (input) => ipcRenderer.invoke('local:startServer', input),
+    stopServer: () => ipcRenderer.invoke('local:stopServer'),
+    ensureModel: (modelId) => ipcRenderer.invoke('local:ensureModel', modelId),
+    configure: (patch) => ipcRenderer.invoke('local:configure', patch),
+    openFolder: (path) => ipcRenderer.invoke('local:openFolder', path),
+    onChanged: (cb) => {
+      const listener = () => cb()
+      ipcRenderer.on('local:changed', listener)
+      return () => ipcRenderer.removeListener('local:changed', listener)
+    },
+    onDownloads: (cb) => {
+      const listener = (_event: Electron.IpcRendererEvent, tasks: Parameters<typeof cb>[0]) => cb(tasks)
+      ipcRenderer.on('local:downloads', listener)
+      return () => ipcRenderer.removeListener('local:downloads', listener)
+    },
   },
 }
 

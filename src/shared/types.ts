@@ -15,6 +15,18 @@ import type {
   SkillsConfig,
   SkillsState,
 } from './skills'
+import type {
+  DownloadTask,
+  LocalCatalogInput,
+  LocalDownloadInput,
+  LocalIndex,
+  LocalServerInput,
+  LocalServerStatus,
+  LocalState,
+  LocalStorageInfo,
+  LocalConfig,
+} from './local'
+import type { UsageConfig, UsageState } from './usage'
 
 export const APP_NAME = 'FCC Desktop'
 export const APP_ID = 'net.xiondigital.fccdesktop'
@@ -68,6 +80,10 @@ export interface AppSettings {
   agent: AgentConfig
   /** Agent Skills: master switch, automatic selection and adapter mode. */
   skills: SkillsConfig
+  /** Local GGUF models: storage folder, llama-server port and load parameters. */
+  local: LocalConfig
+  /** Provider usage monitor: background interval for reading FCC metadata. */
+  usage: UsageConfig
   ui: UiConfig
   workspaces: Workspace[]
 }
@@ -325,7 +341,14 @@ export type AgentEvent =
       permissionDenials: number
     }
   /** The failed attempt is being replayed silently; discard its partial output. */
-  | { type: 'turn-retry'; conversationId: string; turnId: string; reason: string }
+  | {
+      type: 'turn-retry'
+      conversationId: string
+      turnId: string
+      reason: string
+      /** The provider error text, for usage classification only. */
+      detail?: string
+    }
   /** Which installed skills guide this turn, and how their instructions were delivered. */
   | {
       type: 'skills-active'
@@ -421,6 +444,7 @@ export interface FccBridge {
     setCategory(id: string, category: string | null, projectPath?: string | null): Promise<SkillsState>
     remove(id: string, projectPath?: string | null): Promise<SkillsState>
     update(id: string, projectPath?: string | null): Promise<SkillUpdateResult>
+    checkUpdates(input?: { projectPath?: string | null; force?: boolean }): Promise<SkillsState>
     inspectRepo(ref: string): Promise<SkillRepoListing>
     installRepo(input: {
       ref: string
@@ -469,6 +493,33 @@ export interface FccBridge {
   }
   storage: {
     openDataFolder(): Promise<boolean>
+  }
+  usage: {
+    state(): Promise<UsageState>
+    refresh(): Promise<UsageState>
+    configure(patch: Partial<UsageConfig>): Promise<UsageState>
+    clearHistory(): Promise<UsageState>
+    onChanged(cb: (state: UsageState) => void): () => void
+  }
+  local: {
+    state(): Promise<LocalState>
+    catalog(input?: LocalCatalogInput): Promise<LocalIndex>
+    download(input: LocalDownloadInput): Promise<DownloadTask>
+    cancelDownload(id: string): Promise<boolean>
+    clearDownloads(): Promise<boolean>
+    removeModel(path: string): Promise<boolean>
+    pickStorage(): Promise<string | null>
+    setStorage(path: string): Promise<LocalStorageInfo>
+    installRuntime(): Promise<LocalState>
+    removeRuntime(): Promise<LocalState>
+    startServer(input: LocalServerInput): Promise<LocalServerStatus>
+    stopServer(): Promise<LocalServerStatus>
+    /** Starts llama-server for `llamacpp/<alias>` unless it already serves it. */
+    ensureModel(modelId: string): Promise<LocalServerStatus>
+    configure(patch: Partial<LocalConfig>): Promise<LocalState>
+    openFolder(path: string): Promise<boolean>
+    onChanged(cb: () => void): () => void
+    onDownloads(cb: (tasks: DownloadTask[]) => void): () => void
   }
 }
 

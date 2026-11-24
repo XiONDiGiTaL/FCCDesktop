@@ -6,7 +6,7 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 
 ![FCC Desktop overview](docs/screenshots/overview.png)
 
-**[Download the latest build](https://github.com/XiONDiGiTaL/fccGUI/releases/latest)** · [Getting started](#getting-started) · [Build from source](#building-installers)
+**[Download the latest build](https://github.com/XiONDiGiTaL/FCCDesktop/releases/latest)** · [Website](https://xiondigital.github.io/FCCDesktop/) · [Getting started](#getting-started) · [Build from source](#building-installers)
 
 ---
 
@@ -26,6 +26,8 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - [Agent permissions](#agent-permissions)
 - [Workspaces, files and attachments](#workspaces-files-and-attachments)
 - [Agent Skills](#agent-skills)
+- [Local models](#local-models)
+- [Provider usage & rate limits](#provider-usage--rate-limits)
 - [Data, privacy and security](#data-privacy-and-security)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Development](#development)
@@ -72,12 +74,15 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - Attachments are described in the prompt manifest and their directories passed as `--add-dir`, so the agent can read them.
 - Workspaces pin a project so every conversation starts in the right place; extra directories are configurable globally.
 
+**Local models** — download GGUF models from Hugging Face, see which ones fit your GPU, and serve them with llama.cpp so FCC can use them with no provider key.
+
 **Agent Skills**
 - A native Skills view: installed library, discovery and configuration in one place, not a folder browser.
 - Reads the Claude Code skill folders (`%USERPROFILE%\.claude\skills\`, `<workspace>\.claude\skills\`), so existing skills appear without reinstalling.
 - Discover across skills.sh, GitHub repository search and verified curated collections; inspect the real `SKILL.md` before installing.
 - Install from a GitHub URL, `owner/repo` or a folder inside a repository; import a local folder or `.zip`; no `npx skills` or Node dependency.
 - Enable/disable per skill (moved to a CLI-invisible stash, never deleted), automatic invocation, manual-only mode, categories, update from source, project vs global scope.
+- Background update checks compare installed GitHub skills with their source repositories (shortly after launch and every few hours, or when the view opens) and flag the ones that changed upstream, with a single **Update all**. Local edits are never treated as an upstream update.
 - Skills reach the model for real: automatic selection composes `/skill-name` invocations, and an inline adapter covers models without native skill support.
 - Validation and safety: structure checks, suspicious-instruction findings, no script execution, traversal-safe archives, hash-checked updates. Details in [docs/skills.md](docs/skills.md).
 
@@ -209,7 +214,7 @@ curl.exe http://127.0.0.1:8082/v1/models
 
 ### 4. Install FCC Desktop
 
-Download from the [releases page](https://github.com/XiONDiGiTaL/fccGUI/releases/latest):
+Download from the [releases page](https://github.com/XiONDiGiTaL/FCCDesktop/releases/latest):
 
 | Artifact | Use |
 | --- | --- |
@@ -294,6 +299,35 @@ Full documentation: **[docs/skills.md](docs/skills.md)** — architecture, secur
 
 ---
 
+## Local models
+
+FCC Desktop can download GGUF models from Hugging Face and run them with llama.cpp, so a conversation can run on your own GPU without a provider key.
+
+- **Hardware profile** — CPU, threads, RAM and GPU VRAM (read from the display driver on Windows, since `AdapterRAM` caps at 4 GB). It decides the fit labels and which llama.cpp build to install.
+- **Index** — the Recommended list is built by searching Hugging Face per model family (Qwen Coder, Qwen, gpt-oss, DeepSeek R1, Llama, Gemma, Mistral, GLM, Phi, Devstral), preferring proven GGUF publishers over community re-uploads, then download counts. Sizes come from the repositories themselves. Search any repository by name; the index caches for six hours.
+- **Fit** — each quant is scored against this machine: *Runs on GPU* (fits in 94% of VRAM), *Partial offload*, *CPU only* or *Too large*. Quant and file size are selectable per model.
+- **Storage** — pick any folder. GGUF files already in it are listed as installed even when they were added by hand.
+- **Downloads** — resumable (`.part` + `Range`), cancelable, with speed and progress. Gated repositories are refused with a reason because no Hugging Face token is stored.
+- **Runtime** — installs the newest llama.cpp nightly build: Vulkan on Windows/Linux, Metal on macOS, CPU fallback, with ROCm selectable per machine (and a one-click *Reinstall as …* when you change it). No CUDA toolkit needed.
+- **Load settings** — context, GPU layers, threads, batch size, flash attention (`-fa on`) and keep-in-memory (`--no-mmap`), applied on the next Run. The vocabulary follows LM Studio's load dialog so the concepts carry over.
+- **Using it** — installed GGUF files appear in the chat model picker under **Local models**: picking one starts `llama-server` on `127.0.0.1:8080` for that file and sends the FCC id `llamacpp/<alias>` with the conversation. *Run* in the library does the same by hand and shows the endpoint. When FCC Desktop starts the FCC server itself it passes `LLAMACPP_BASE_URL`; if FCC runs separately, point **Providers → llama.cpp** in its Admin UI at the shown URL.
+
+Details, architecture and limits: [`docs/local-models.md`](docs/local-models.md).
+
+## Provider usage & rate limits
+
+A **Usage & limits** view shows what the active provider reports, what FCC Desktop counted, and what is unavailable —
+without inventing a quota.
+
+- **Provider status** — provider name, active model, key configuration state from FCC's own Admin status, last sync and connection state. Interactive through the sidebar entry and the in-chat banner.
+- **Rate-limit handling** — a `429` is classified as temporary throttling or exhausted quota, the upstream provider, category and request ID are captured, and a live countdown appears when the error contains a retry/reset time. Without a time, the report is treated as current only while it is recent (90 seconds for throttling, 15 minutes for exhausted quota), then it stays visible as a dated “last reported — no longer current” line instead of a permanent status.
+- **Local activity** — request attempts, successes, failures, `429`s, reported tokens, per-model totals, today, 7 days and a 30-day timeline. Every figure is labelled **Locally tracked**, never as remaining account quota.
+- **Honest limits** — NVIDIA NIM publishes no usage or remaining-quota API and its 429s usually carry no rate-limit headers, so provider quota is shown as **Not exposed**. Provider capability notes explain the same for OpenRouter, Anthropic/OpenAI, Groq and local providers.
+- **Refresh** — when the first connection probe succeeds and after a reconnect, after a turn, after a 429, when a cooldown ends, on a configurable interval (30 s–15 min, default 2 min) or manually. It reads FCC metadata only and never sends a model request, so monitoring cannot itself consume quota.
+- **Offline** — the last successful status and local history are cached and marked as cached when FCC is unreachable.
+
+Full technical notes, data sources and provider limitations: [`docs/usage-monitor.md`](docs/usage-monitor.md).
+
 ## Data, privacy and security
 
 Everything is local. There is no telemetry, no analytics and no remote storage.
@@ -303,6 +337,7 @@ Everything is local. There is no telemetry, no analytics and no remote storage.
 | `%APPDATA%\FCC Desktop\data\settings.json` | Preferences (no secrets). |
 | `%APPDATA%\FCC Desktop\data\secrets.json` | Encrypted proxy token (DPAPI via `safeStorage`). |
 | `%APPDATA%\FCC Desktop\data\conversations\<uuid>.json` | Conversations, messages, tool state, usage. |
+| `%APPDATA%\FCC Desktop\data\usage.json` | Local request counts, last 429 metadata and cached provider status. No credentials. |
 | `%APPDATA%\FCC Desktop\logs\` | Rolling application log. |
 
 Security posture:
@@ -338,6 +373,10 @@ npm run dev        # Vite dev server + Electron with hot reload
 npm run typecheck  # tsc --noEmit
 npm run build      # renderer → dist/renderer, main/preload → dist/main
 npm start          # run the built app
+
+npm run test:skills
+npm run test:local
+npm run test:usage
 ```
 
 Project layout:
@@ -349,8 +388,10 @@ electron/
   ipc.ts               validated IPC handlers
   core/                paths, atomic writes, logger, settings, secrets, conversations
   fcc/                 http client, tool discovery, model catalog, connection, agent
+  usage/               provider usage monitor, 429 classification, local telemetry
 src/
   shared/types.ts      contracts shared by main and renderer
+  shared/usage.ts      usage contracts, header/error parsers, capability and summaries
   renderer/            App, components, styles, fonts
 scripts/
   build-main.mjs       esbuild bundle for main + preload (CJS)
@@ -413,7 +454,7 @@ Code signing is not configured; the artifacts are unsigned.
 | **Executables: not found** | Install FCC so `fcc-server.exe` and `fcc-claude.exe` are on PATH, or set both paths manually in Settings → Connection → Executables. |
 | Model list is empty | The proxy is up but `/v1/models` failed — often a token mismatch. Set the proxy token, then press Refresh in the picker. |
 | Provider errors (`401`, `403`, `404` on a model) | The NVIDIA key was not saved or not applied. In Admin → Providers → NVIDIA NIM check the key row, hit **Save**, then **Apply** again. Keys are shown only once when generated, so regenerate if the value was lost. |
-| `429` or "rate limit" mid-conversation | The free NVIDIA tier is rate-limited (about 40 requests/minute for most models). Wait a minute, or add a second provider key in Admin and FCC will use the next one. |
+| `429` or "rate limit" mid-conversation | The free NVIDIA tier is rate-limited (a baseline of about 40 requests/minute, varying by model and traffic). Open **Usage & limits** to see whether it is temporary throttling or exhausted quota, any reported retry time, and locally counted activity. Wait a minute, or add a second provider key in Admin. |
 | Agent cannot see a file | The path is outside the workspace and was not attached. Attach it, add its folder under Settings → Agent → additional directories, or switch the workspace. |
 | Stop leaves a turn marked running | The process was killed externally; reopen the conversation — stale streaming messages are normalised to stopped on load. |
 | Blank window in a packaged build | Launch with `--enable-logging` and check `%APPDATA%\FCC Desktop\logs`. A stale `release/` folder is the usual cause; rebuild with `npm run dist`. |
@@ -434,11 +475,16 @@ Against a live FCC server on `127.0.0.1:8082` (`nvidia_nim`, 44 models) and Clau
 - Packaged build (`win-unpacked`) launching from `app.asar`, connecting, resuming the stored session and completing a turn.
 - Agent Skills: `skills.sh` search (40 results), a real GitHub download of `vercel-labs/agent-skills` (9 valid skills, 2 installed into a temp project), automatic selection of `vercel-react-best-practices` for a React performance prompt, and that composed prompt producing a grounded answer from Claude Code `2.1.330`.
 - Agent Skills delivery: a marker skill installed in a project was loaded natively through the `Skill` tool with no permission denial, including under a restricted `--allowedTools` list; with no skill installed at all, the inline adapter applied the same marker.
-- Agent Skills engine: `npm run test:skills` — 29 passing cases covering parsing, validation, safety findings, tar/zip traversal, store toggling, scoring, both delivery modes, and the service-level install/toggle/remove/isolation paths.
+- Agent Skills engine: `npm run test:skills` — 32 passing cases covering parsing, validation, safety findings, tar/zip traversal, store toggling, upstream update flags, scoring, both delivery modes, and the service-level install/toggle/remove/isolation paths.
+- Local models: hardware detection on Windows (Ryzen 7 5700X3D, 32 GB RAM, Radeon RX 7900 XT reported as 20 GB VRAM, Vulkan backend), a live Hugging Face index of 10 real GGUF repositories with real file sizes, a 769 MB download at ~113 MB/s, install of llama.cpp b12670, and a model answering `POST /v1/chat/completions` with "local ready" (~168 tokens/s generation).
+- Local models engine: `npm run test:local` — 13 passing cases for fit scoring, quant/parameter parsing, Vulkan/ROCm/CPU asset selection, llama-server argument building and model ids.
+- Provider usage monitor: live FCC `/` and `/admin/api/status` reads on `127.0.0.1:8082` (provider `nvidia_nim`, model `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, key configured), confirmation that `/usage`, `/v1/usage`, `/api/usage` and `/rate-limits` return 404, and `npm run test:usage` — 19 passing cases for NIM 429 text, quota exhaustion vs throttling, Retry-After and reset parsing, rate-limit headers, 5xx/401, redaction, availability states, capability reporting, startup/reconnect sync and local daily/weekly aggregates.
+- Agent Skills update detection against a real repository: a clean install reported no update, a stale install hash was flagged, `Update` replaced the folder and cleared the flag, and the next check stayed clean.
 
 Not exercised in this pass:
 
 - The Skills view itself was not clicked through in a running window (the data layer and CLI integration were verified directly; the UI compiled and was reviewed by inspection).
+- The Usage view and its in-chat banner were not clicked through in a running window, and no live 429 was triggered deliberately (the running FCC server must not be disturbed). Parsing, status transitions and capability reporting are covered by `npm run test:usage`.
 
 - The Start/Stop server buttons (an externally managed FCC server was live and must not be disturbed). The code path only tracks app-owned processes.
 - Selecting files inside the native Windows picker (the dialog opens with the right title and filters, and the selection pipeline was validated through the IPC layer).

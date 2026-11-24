@@ -23,11 +23,17 @@ import ChatView from './components/ChatView'
 import Composer from './components/Composer'
 import SettingsPanel from './components/Settings'
 import SkillsView from './components/SkillsView'
+import LocalModelsView from './components/LocalModelsView'
+import UsageView from './components/UsageView'
+import UsageBanner from './components/UsageBanner'
+import type { UsageState } from '../shared/usage'
 import ActivityRail from './components/ActivityRail'
 import type { ActiveSkillsState } from './components/ActiveSkills'
 import type { SkillSummary } from '../shared/skills'
 import { Button, Modal } from './components/ui'
 import { friendlyError } from './lib/format'
+import type { InstalledModel } from '../shared/local'
+import { isLocalModelId, localModelId } from '../shared/local'
 
 const api = window.fcc
 
@@ -241,7 +247,8 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [queues, setQueues] = useState<Record<string, QueuedMessage[]>>({})
-  const [view, setView] = useState<'chat' | 'skills'>('chat')
+  const [view, setView] = useState<'chat' | 'skills' | 'models' | 'usage'>('chat')
+  const [usageState, setUsageState] = useState<UsageState | null>(null)
   const [skillList, setSkillList] = useState<SkillSummary[]>([])
   const [selectedSkills, setSelectedSkills] = useState<string[]>([])
   const [skillsByConversation, setSkillsByConversation] = useState<Record<string, ActiveSkillsState>>({})
@@ -259,6 +266,59 @@ export default function App() {
 
   const settings = settingsEnvelope?.settings ?? null
   const models = catalog?.models ?? []
+  const [localInstalled, setLocalInstalled] = useState<InstalledModel[]>([])
+
+  const refreshLocalModels = useCallback(async () => {
+    try {
+      const next = await api.local.state()
+      setLocalInstalled(next.installed)
+    } catch (error) {
+      console.error('Could not read the local model library', error)
+    }
+  }, [])
+
+  // Installed GGUF files belong in the composer: FCC routes a `llamacpp/<alias>`
+  // id to the llama.cpp provider this app points at, but its own catalog never
+  // lists them, so they are merged in ahead of the hosted models.
+  const pickerModels = useMemo<ModelInfo[]>(() => {
+    const local: ModelInfo[] = localInstalled.map((model) => ({
+      id: localModelId(model.path),
+      displayName: model.filename.replace(/\.gguf$/i, ''),
+      provider: 'local',
+      group: 'Local models',
+      noThinking: false,
+    }))
+    return [...local, ...models]
+  }, [localInstalled, models])
+
+  useEffect(() => {
+    void refreshLocalModels()
+    return api.local.onChanged(() => void refreshLocalModels())
+  }, [refreshLocalModels])
+
+  /** Loads `llamacpp/<alias>` in llama-server; a message means it failed. */
+  const ensureLocalModel = useCallback(
+    async (modelId: string): Promise<string | null> => {
+      try {
+        const status = await api.local.ensureModel(modelId)
+        return status.running ? null : status.message ?? 'The local model server did not start.'
+      } catch (error) {
+        return friendlyError(error)
+      } finally {
+        void refreshLocalModels()
+      }
+    },
+    [refreshLocalModels],
+  )
+
+  const prepareLocalModel = useCallback(
+    async (modelId: string) => {
+      const failure = await ensureLocalModel(modelId)
+      if (failure) setToast({ kind: 'error', text: failure })
+      else setToast({ kind: 'info', text: `${modelId} is loaded and ready for this conversation.` })
+    },
+    [ensureLocalModel],
+  )
 
   const refreshSummaries = useCallback(async () => {
     try {
@@ -462,12 +522,15 @@ export default function App() {
     const offChanged = api.conversations.onChanged(() => void refreshSummaries())
     const offWindow = api.app.onWindowState((state) => setMaximized(state.maximized))
     const offSkills = api.skills.onChanged(() => void refreshSkills())
+    const offUsage = api.usage.onChanged((next) => setUsageState(next))
+    void api.usage.state().then(setUsageState).catch(() => {})
     return () => {
       offAgent()
       offStatus()
       offChanged()
       offWindow()
       offSkills()
+      offUsage()
     }
   }, [refreshSkills, refreshSummaries])
 
@@ -480,6 +543,19 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(null), 6000)
     return () => window.clearTimeout(timer)
   }, [toast])
+
+  // When a reported cooldown ends, ask once for fresh status instead of
+  // leaving the banner stale until the next poll.
+  useEffect(() => {
+    const until = usageState?.provider.cooldownUntil
+    if (!until) return
+    const delay = until - Date.now()
+    if (delay <= 0) return
+    const timer = window.setTimeout(() => {
+      void api.usage.refresh().then(setUsageState).catch(() => {})
+    }, Math.min(delay + 750, 2147483647))
+    return () => window.clearTimeout(timer)
+  }, [usageState?.provider.cooldownUntil])
 
   // ---------------------------------------------------------------- settings
   const patchSettings = useCallback(async (patch: DeepPartial<AppSettings>) => {
@@ -600,6 +676,8 @@ export default function App() {
 
   const setModel = useCallback(
     async (modelId: string) => {
+      // Start loading a local GGUF right away so the first turn does not wait on it.
+      if (isLocalModelId(modelId)) void prepareLocalModel(modelId)
       const conversation = activeIdRef.current ? cache.current.get(activeIdRef.current) : null
       if (!conversation) {
         await patchSettings({ agent: { defaultModel: modelId } })
@@ -609,7 +687,7 @@ export default function App() {
       setActive({ ...conversation })
       persist(conversation, true)
     },
-    [patchSettings, persist],
+    [patchSettings, persist, prepareLocalModel],
   )
 
   const setWorkspace = useCallback(
@@ -787,6 +865,20 @@ export default function App() {
       }
       persist(conversation, true)
 
+      if (isLocalModelId(model)) {
+        const failure = await ensureLocalModel(model)
+        if (failure) {
+          assistantMessage.status = 'error'
+          assistantMessage.error = failure
+          if (activeIdRef.current === conversation.id) {
+            setActive({ ...conversation })
+            setPhase('idle')
+          }
+          setToast({ kind: 'error', text: failure })
+          return
+        }
+      }
+
       try {
         const result = await api.agent.send({
           conversationId: conversation.id,
@@ -816,7 +908,7 @@ export default function App() {
         void api.agent.runtime(conversation.id).then(setRuntime).catch(() => {})
       }
     },
-    [models, persist, settings?.agent.defaultModel, settings?.agent.workingDirectory],
+    [ensureLocalModel, models, persist, settings?.agent.defaultModel, settings?.agent.workingDirectory],
   )
 
   const send = useCallback(async () => {
@@ -1064,6 +1156,9 @@ export default function App() {
           collapsed={sidebarCollapsed}
           onOpenSkills={() => setView('skills')}
           skillsCount={skillList.filter((skill) => skill.enabled).length}
+          onOpenModels={() => setView('models')}
+          onOpenUsage={() => setView('usage')}
+          usage={usageState}
         />
 
         <main className="workspace">
@@ -1082,12 +1177,29 @@ export default function App() {
                 onSkillsChanged={() => void refreshSkills()}
               />
             </div>
+          ) : view === 'models' ? (
+            <div className="workspace-main skills-workspace">
+              <LocalModelsView
+                onBack={() => setView('chat')}
+                onToast={(kind, text) => setToast({ kind, text })}
+              />
+            </div>
+          ) : view === 'usage' ? (
+            <div className="workspace-main skills-workspace">
+              <UsageView
+                state={usageState}
+                activeModel={active?.model || settings?.agent.defaultModel || ''}
+                onState={setUsageState}
+                onBack={() => setView('chat')}
+                onToast={(kind, text) => setToast({ kind, text })}
+              />
+            </div>
           ) : (
             <>
           <div className="workspace-main">
             <ChatView
               conversation={active}
-              models={models}
+              models={pickerModels}
               streaming={streamingHere}
               phase={phase}
               showThinking={settings?.agent.showThinking ?? true}
@@ -1107,6 +1219,8 @@ export default function App() {
               onOpenSkills={() => setView('skills')}
             />
 
+            <UsageBanner state={usageState} onOpen={() => setView('usage')} />
+
             <Composer
               value={draft}
               onChange={setDraft}
@@ -1121,7 +1235,7 @@ export default function App() {
                 setAttachments((current) => current.filter((item) => item.path !== path))
               }
               model={active?.model || settings?.agent.defaultModel || ''}
-              models={models}
+              models={pickerModels}
               onSelectModel={(id) => void setModel(id)}
               onRefreshModels={() => void api.connection.models(true).then(setCatalog)}
               catalogError={catalog?.error ?? null}
@@ -1153,7 +1267,7 @@ export default function App() {
               phase={phase}
               streaming={streamingHere}
               status={status}
-              models={models}
+              models={pickerModels}
               onClose={toggleActivity}
             />
           ) : null}

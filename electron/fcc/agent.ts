@@ -740,7 +740,14 @@ export class AgentManager {
         try {
           session.proc.stdin?.write(`${retryLine}\n`)
           log.warn('agent', `Provider failure on ${session.conversationId} — retrying the turn once`)
-          this.emit({ type: 'turn-retry', conversationId: session.conversationId, turnId, reason: 'provider' })
+          this.emit({
+            type: 'turn-retry',
+            conversationId: session.conversationId,
+            turnId,
+            reason: 'provider',
+            // Kept for the usage monitor: the retry itself carries no error text.
+            detail: resultText.slice(0, 900),
+          })
           this.emit({
             type: 'status',
             conversationId: session.conversationId,

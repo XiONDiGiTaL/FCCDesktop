@@ -239,6 +239,21 @@ export const SidebarIcon = (p: IconProps) => (
   </Icon>
 )
 
+export const GaugeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4.2 17.5a8.2 8.2 0 1 1 15.6 0" />
+    <path d="M12 17.5l4.1-5" />
+    <circle cx="12" cy="17.5" r="1.5" fill="currentColor" stroke="none" />
+  </Icon>
+)
+
+export const InfoIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="8.4" />
+    <path d="M12 11v5.5M12 7.8v.4" />
+  </Icon>
+)
+
 export const XionMark = ({ size = 22, className }: { size?: number; className?: string }) => (
   <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true" className={className}>
     <defs>

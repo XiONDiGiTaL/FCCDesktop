@@ -1,14 +1,18 @@
 {
   "name": "fcc-desktop",
   "productName": "FCC Desktop",
-  "version": "1.0.4",
+  "version": "1.0.7",
   "description": "A XiON desktop environment for Free Claude Code (FCC)",
   "author": {
     "name": "XiON",
     "email": "xiondigital@gmail.com",
     "url": "https://xiondigital.net"
   },
-  "homepage": "https://github.com/XiONDiGiTaL/fccGUI",
+  "homepage": "https://github.com/XiONDiGiTaL/FCCDesktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/XiONDiGiTaL/FCCDesktop.git"
+  },
   "license": "AGPL-3.0",
   "private": true,
   "main": "dist/main/main.cjs",
@@ -21,7 +25,9 @@
     "start": "electron .",
     "dist": "npm run build && electron-builder --win",
     "dist:dir": "npm run build && electron-builder --win --dir",
-    "test:skills": "node scripts/test-skills.mjs"
+    "test:skills": "node scripts/test-skills.mjs",
+    "test:local": "node scripts/test-local.mjs",
+    "test:usage": "node scripts/test-usage.mjs"
   },
   "dependencies": {},
   "devDependencies": {

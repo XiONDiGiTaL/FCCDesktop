@@ -27,6 +27,13 @@ export interface SkillLocation {
   projectPath: string | null
 }
 
+export interface SkillUpstreamState {
+  checkedAt: number
+  available: boolean
+  version?: string | null
+  error?: string | null
+}
+
 export interface SkillStateEntry {
   enabled?: boolean
   autoInvoke?: boolean
@@ -36,12 +43,16 @@ export interface SkillStateEntry {
   version?: string | null
   origin?: SkillOrigin
   instructionsHash?: string
+  /** Result of the last background comparison with the source repository. */
+  upstream?: SkillUpstreamState
 }
 
 export interface SkillsStateFile {
   version: 1
   revision: number
   entries: Record<string, SkillStateEntry>
+  /** Last automatic update check per scope key (`global` or a project path). */
+  checks?: Record<string, number>
 }
 
 export const EMPTY_STATE: SkillsStateFile = { version: 1, revision: 0, entries: {} }
@@ -140,6 +151,9 @@ export function scanSkills(locations: SkillLocation[], state: SkillsStateFile): 
           warnings,
           nativeVisible: variant.enabled,
           invocation: parsedSkill.name,
+          updateAvailable: stored?.upstream?.available ?? false,
+          updateCheckedAt: stored?.upstream?.checkedAt ?? null,
+          updateError: stored?.upstream?.error ?? null,
         }
         skills.push(summary)
         records.set(id, {

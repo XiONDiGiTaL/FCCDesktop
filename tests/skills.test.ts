@@ -79,6 +79,9 @@ function summary(partial: Partial<SkillSummary> & { id: string; name: string }):
     warnings: [],
     nativeVisible: true,
     invocation: partial.name,
+    updateAvailable: false,
+    updateCheckedAt: null,
+    updateError: null,
     ...partial,
   }
 }
@@ -568,4 +571,57 @@ test('service: update on a local skill reports that there is no upstream', async
   const outcome = await skillsService.update(skill?.id ?? '', null)
   assert.equal(outcome.ok, false)
   assert.match(outcome.message, /no GitHub source/)
+})
+
+// ------------------------------------------------------- upstream updates
+
+test('store: a recorded upstream comparison surfaces as update flags', () => {
+  const root = tempDir('upstream')
+  const dir = writeSkill(root, 'tracked', '---\nname: tracked\ndescription: Tracks its upstream.\n---')
+  const parsed = parseSkillDirectory(dir)
+  assert.ok(parsed.skill)
+  const id = skillIdentity('global', null, 'tracked')
+  const scan = scanSkills([{ scope: 'global', root, projectPath: null }], {
+    version: 1,
+    revision: 3,
+    entries: {
+      [id]: {
+        origin: 'fcc',
+        instructionsHash: 'old-hash',
+        upstream: { checkedAt: 1700000000000, available: true, version: '2.0.0', error: null },
+      },
+    },
+  })
+  const skill = scan.skills[0]
+  assert.equal(skill?.updateAvailable, true)
+  assert.equal(skill?.updateCheckedAt, 1700000000000)
+  assert.equal(skill?.updateError, null)
+})
+
+test('store: a failed check keeps the flag but reports the error', () => {
+  const root = tempDir('upstream-error')
+  writeSkill(root, 'broken-source', '---\nname: broken-source\ndescription: Source disappeared.\n---')
+  const id = skillIdentity('global', null, 'broken-source')
+  const scan = scanSkills([{ scope: 'global', root, projectPath: null }], {
+    version: 1,
+    revision: 1,
+    entries: {
+      [id]: { origin: 'fcc', upstream: { checkedAt: 1, available: false, error: 'Repository not found' } },
+    },
+  })
+  assert.equal(scan.skills[0]?.updateAvailable, false)
+  assert.match(scan.skills[0]?.updateError ?? '', /not found/)
+})
+
+test('service: update check ignores skills without a GitHub source', async () => {
+  process.env.FCC_TEST_USERDATA = tempDir('userdata-f')
+  process.env.FCC_CLAUDE_SKILLS_DIR = tempDir('service-global-f')
+  const source = writeSkill(tempDir('chk-src'), 'offline-skill', '---\nname: offline-skill\ndescription: Local only.\n---')
+  skillsService.importLocal({ paths: [source], scope: 'global' })
+
+  const state = await skillsService.checkUpdates(null, true)
+  const skill = state.skills.find((entry) => entry.name === 'offline-skill')
+  assert.equal(skill?.updateAvailable, false)
+  assert.equal(skill?.updateError, null)
+  assert.equal(skill?.updateCheckedAt, null, 'a local skill has no upstream to check')
 })

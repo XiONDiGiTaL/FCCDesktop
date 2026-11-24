@@ -62,6 +62,12 @@ export interface SkillSummary {
   nativeVisible: boolean
   /** Name the model sees: bare for global, prefixed for project skills. */
   invocation: string
+  /** True when the upstream SKILL.md differs from the installed copy. */
+  updateAvailable: boolean
+  /** When FCC last compared this skill with its source repository. */
+  updateCheckedAt: number | null
+  /** Why the last check could not complete (network, deleted folder, private repo). */
+  updateError: string | null
 }
 
 export interface SkillDetail extends SkillSummary {
@@ -173,6 +179,12 @@ export interface SkillsState {
 export interface SkillListInput {
   projectPath?: string | null
   refresh?: boolean
+}
+
+export interface SkillUpdateCheckInput {
+  projectPath?: string | null
+  /** Bypass the throttle and hit GitHub now. */
+  force?: boolean
 }
 
 export interface SkillInstallInput {

@@ -36,6 +36,9 @@ import {
 } from './core/conversations'
 import { detectTools } from './fcc/discovery'
 import { skillsService } from './skills/service'
+import { localModelsService } from './local/service'
+import type { UsageMonitor } from './usage/service'
+import type { LocalCatalogInput, LocalDownloadInput, LocalServerInput } from '../src/shared/local'
 import type { ConnectionManager } from './fcc/connection'
 import type { AgentManager } from './fcc/agent'
 import { log, logTail } from './core/logger'
@@ -113,11 +116,12 @@ function sanitizeSettingsPatch(patch: unknown): DeepPartial<AppSettings> {
 export interface IpcDeps {
   connection: ConnectionManager
   agent: AgentManager
+  usage: UsageMonitor
   getWindow: () => BrowserWindow | null
   broadcastConversations: () => void
 }
 
-export function registerIpc({ connection, agent, getWindow, broadcastConversations }: IpcDeps): void {
+export function registerIpc({ connection, agent, usage, getWindow, broadcastConversations }: IpcDeps): void {
   loadConversations()
 
   // ---------------------------------------------------------------- app shell
@@ -232,6 +236,11 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
     return skillsService.update(skillId, projectOf(projectPath))
   })
 
+  ipcMain.handle('skills:checkUpdates', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as { projectPath?: unknown; force?: unknown }
+    return skillsService.checkUpdates(projectOf(record.projectPath), Boolean(record.force))
+  })
+
   ipcMain.handle('skills:inspectRepo', (_event, ref: unknown) => {
     const value = textOf(ref, 512)
     if (!value) return { repo: '', ref: '', url: '', entries: [], error: 'Enter a repository first.' }
@@ -314,7 +323,17 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
   const offSkills = skillsService.onChange(() => {
     getWindow()?.webContents.send('skills:changed')
   })
-  app.once('will-quit', () => offSkills())
+  skillsService.startBackgroundChecks()
+  app.once('will-quit', () => {
+    offSkills()
+    skillsService.stopBackgroundChecks()
+  })
+  app.once('before-quit', () => {
+    offLocalChanged()
+    offLocalDownloads()
+    // Only stops a llama-server this app spawned; an external one is untouched.
+    localModelsService.runtime.stop()
+  })
 
   // -------------------------------------------------------------- connection
   ipcMain.handle('connection:status', (): ConnectionStatus => connection.current())
@@ -500,11 +519,13 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
         : [],
       resumeSessionId: typeof payload.resumeSessionId === 'string' ? payload.resumeSessionId : null,
     }
+    usage.beginRequest(sanitized.conversationId, sanitized.model)
     try {
       const result = await agent.send(sanitized)
       return result
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      usage.failRequest(sanitized.conversationId, message)
       log.warn('agent', `Send failed: ${message}`)
       throw new Error(message)
     }
@@ -559,6 +580,146 @@ export function registerIpc({ connection, agent, getWindow, broadcastConversatio
     clipboard.writeText(JSON.stringify(snapshot, null, 2))
     return true
   })
+
+  // ------------------------------------------------------------- local models
+  ipcMain.handle('local:state', () => localModelsService.state())
+
+  ipcMain.handle('local:ensureModel', (_event, modelId: unknown) => {
+    if (typeof modelId !== 'string' || !modelId.trim()) throw new Error('Choose a local model first.')
+    return localModelsService.ensureModel(modelId.trim())
+  })
+
+  ipcMain.handle('local:catalog', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as LocalCatalogInput
+    return localModelsService.catalog({
+      refresh: Boolean(record.refresh),
+      query: typeof record.query === 'string' ? record.query.slice(0, 120) : '',
+      family: typeof record.family === 'string' ? record.family.slice(0, 60) : null,
+    })
+  })
+
+  ipcMain.handle('local:download', (_event, input: unknown) => {
+    if (!input || typeof input !== 'object') throw new Error('Invalid download request.')
+    const record = input as LocalDownloadInput
+    if (typeof record.repo !== 'string' || !/^[\w.-]+\/[\w.-]+$/.test(record.repo)) {
+      throw new Error('Invalid Hugging Face repository.')
+    }
+    if (
+      typeof record.filename !== 'string' ||
+      !record.filename.toLowerCase().endsWith('.gguf') ||
+      /[\\/]/.test(record.filename)
+    ) {
+      throw new Error('Invalid model file name.')
+    }
+    return localModelsService.download({
+      repo: record.repo,
+      filename: record.filename,
+      quant: typeof record.quant === 'string' ? record.quant.slice(0, 24) : undefined,
+    })
+  })
+
+  ipcMain.handle('local:cancelDownload', (_event, id: unknown) =>
+    typeof id === 'string' ? localModelsService.cancelDownload(id) : false,
+  )
+
+  ipcMain.handle('local:clearDownloads', () => {
+    localModelsService.clearDownloads()
+    return true
+  })
+
+  ipcMain.handle('local:removeModel', (_event, path: unknown) => {
+    if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('Invalid model path.')
+    return localModelsService.removeModel(path)
+  })
+
+  ipcMain.handle('local:pickStorage', async (event) => {
+    const win = windowOf(event) ?? getWindow()
+    const result = await openDialog(win, {
+      title: 'Choose where downloaded models are stored',
+      defaultPath: localModelsService.storageDir(),
+      properties: ['openDirectory', 'createDirectory'],
+    })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
+
+  ipcMain.handle('local:setStorage', (_event, path: unknown) => {
+    if (typeof path !== 'string' || path.length > 512 || !isAbsolute(path)) {
+      throw new Error('Choose an absolute folder path.')
+    }
+    return localModelsService.setStorageDir(path)
+  })
+
+  ipcMain.handle('local:installRuntime', async () => {
+    await localModelsService.installRuntime()
+    return localModelsService.state()
+  })
+
+  ipcMain.handle('local:removeRuntime', () => {
+    localModelsService.removeRuntime()
+    return localModelsService.state()
+  })
+
+  ipcMain.handle('local:startServer', (_event, input: unknown) => {
+    const record = (input && typeof input === 'object' ? input : {}) as LocalServerInput
+    if (typeof record.path !== 'string' || !isAbsolute(record.path)) throw new Error('Invalid model path.')
+    return localModelsService.startServer({
+      path: record.path,
+      port: Number(record.port) || undefined,
+      contextSize: Number(record.contextSize) || undefined,
+      gpuLayers: Number(record.gpuLayers) || undefined,
+    })
+  })
+
+  ipcMain.handle('local:stopServer', () => localModelsService.stopServer())
+
+  ipcMain.handle('local:configure', async (_event, patch: unknown) => {
+    if (!patch || typeof patch !== 'object') throw new Error('Invalid local model settings.')
+    const record = patch as Record<string, unknown>
+    const clean: Record<string, unknown> = {}
+    if (typeof record.contextSize === 'number') clean.contextSize = record.contextSize
+    if (typeof record.gpuLayers === 'number') clean.gpuLayers = record.gpuLayers
+    if (typeof record.threads === 'number') clean.threads = record.threads
+    if (typeof record.batchSize === 'number') clean.batchSize = record.batchSize
+    if (typeof record.flashAttention === 'boolean') clean.flashAttention = record.flashAttention
+    if (typeof record.keepModelInMemory === 'boolean') clean.keepModelInMemory = record.keepModelInMemory
+    if (typeof record.backend === 'string' && ['auto', 'vulkan', 'rocm', 'metal', 'cpu'].includes(record.backend)) {
+      clean.backend = record.backend
+    }
+    localModelsService.configure(clean)
+    return localModelsService.state()
+  })
+
+  ipcMain.handle('local:openFolder', async (_event, path: unknown) => {
+    if (typeof path === 'string' && isAbsolute(path) && existsSync(path)) {
+      shell.showItemInFolder(normalize(path))
+      return true
+    }
+    const error = await shell.openPath(localModelsService.storageDir())
+    return error === ''
+  })
+
+  const sendLocal = (channel: string, payload: unknown): void => {
+    const win = getWindow()
+    if (win && !win.isDestroyed()) win.webContents.send(channel, payload)
+  }
+  const offLocalChanged = localModelsService.onChange(() => sendLocal('local:changed', null))
+  const offLocalDownloads = localModelsService.onDownloads((tasks) => sendLocal('local:downloads', tasks))
+
+  // ------------------------------------------------------------ usage monitor
+  ipcMain.handle('usage:state', () => usage.state())
+  ipcMain.handle('usage:refresh', () => usage.refresh('manual', true))
+  ipcMain.handle('usage:configure', (_event, patch: unknown) => {
+    if (!patch || typeof patch !== 'object') throw new Error('Invalid usage settings.')
+    const record = patch as Record<string, unknown>
+    return usage.configure({
+      ...(typeof record.enabled === 'boolean' ? { enabled: record.enabled } : {}),
+      ...(typeof record.pollSeconds === 'number' ? { pollSeconds: record.pollSeconds } : {}),
+    })
+  })
+  ipcMain.handle('usage:clearHistory', () => usage.clearHistory())
+
+  const offUsage = usage.onChange((state) => sendLocal('usage:changed', state))
+  app.once('before-quit', () => offUsage())
 
   log.info('ipc', `Registered IPC handlers (token configured: ${getProxyToken() ? 'yes' : 'no'})`)
 }

@@ -113,6 +113,7 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
                         <span className="model-row-name">{model.displayName}</span>
                         <span className="model-row-id">{model.id}</span>
                       </span>
+                      {model.provider === 'local' ? <span className="model-tag is-local">local</span> : null}
                       {model.noThinking ? <span className="model-tag">no thinking</span> : null}
                       {model.id === value ? <CheckIcon size={15} className="model-check" /> : null}
                     </button>

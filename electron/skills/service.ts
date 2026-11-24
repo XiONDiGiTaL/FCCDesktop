@@ -62,6 +62,7 @@ export class SkillsService {
   private scannedProject: string | null | undefined
   private scannedAt = 0
   private listeners = new Set<() => void>()
+  private timer: NodeJS.Timeout | null = null
 
   onChange(listener: () => void): () => void {
     this.listeners.add(listener)
@@ -83,7 +84,12 @@ export class SkillsService {
     const stored = readJson<SkillsStateFile | null>(statePath(), null)
     this.state =
       stored && typeof stored === 'object' && stored.entries && typeof stored.entries === 'object'
-        ? { version: 1, revision: Number(stored.revision) || 0, entries: stored.entries }
+        ? {
+            version: 1,
+            revision: Number(stored.revision) || 0,
+            entries: stored.entries,
+            checks: stored.checks && typeof stored.checks === 'object' ? stored.checks : {},
+          }
         : structuredClone(EMPTY_STATE)
     return this.state
   }
@@ -333,6 +339,9 @@ export class SkillsService {
         warnings: skill.warnings,
         nativeVisible: true,
         invocation: skill.name,
+        updateAvailable: false,
+        updateCheckedAt: null,
+        updateError: null,
       })
     }
 
@@ -430,6 +439,9 @@ export class SkillsService {
           warnings: skill.warnings,
           nativeVisible: true,
           invocation: skill.name,
+          updateAvailable: false,
+          updateCheckedAt: null,
+          updateError: null,
         })
       }
     }
@@ -473,6 +485,101 @@ export class SkillsService {
     } finally {
       rmSync(staging, { recursive: true, force: true })
     }
+  }
+
+  /**
+   * Compare installed GitHub skills with their source repositories.
+   *
+   * Grouped by repository, so ten skills from one repo cost one download. The
+   * result is persisted per skill, which is what lets the view show "update
+   * available" without asking GitHub again on every render.
+   */
+  async checkUpdates(projectPath: string | null, force = false): Promise<SkillsState> {
+    const state = this.loadState()
+    const scopeKey = projectPath ?? 'global'
+    const last = state.checks?.[scopeKey] ?? 0
+    if (!force && Date.now() - last < 10 * 60_000) return this.stateFor(projectPath)
+
+    this.scan(projectPath, true)
+    const groups = new Map<string, SkillSummary[]>()
+    for (const skill of this.summaries) {
+      const source = skill.source
+      if (!source || source.kind !== 'github' || !source.repo || !source.path) continue
+      const key = `${source.repo}@${source.ref ?? ''}`
+      const list = groups.get(key) ?? []
+      list.push(skill)
+      groups.set(key, list)
+    }
+
+    state.checks = { ...(state.checks ?? {}), [scopeKey]: Date.now() }
+
+    for (const list of groups.values()) {
+      const source = list[0]?.source
+      if (!source?.repo) continue
+      const prepared = await prepareRepo(source.repo, source.ref ?? null)
+      const checkedAt = Date.now()
+      for (const skill of list) {
+        const entry = this.entryFor(skill.id)
+        if (prepared.error) {
+          entry.upstream = { checkedAt, available: entry.upstream?.available ?? false, error: prepared.error }
+          continue
+        }
+        const dir = join(prepared.root, skill.source?.path ?? '')
+        if (!existsSync(dir)) {
+          entry.upstream = {
+            checkedAt,
+            available: false,
+            error: 'That skill folder no longer exists in the source repository.',
+          }
+          continue
+        }
+        const parsed = parseSkillDirectory(dir)
+        if (!parsed.skill) {
+          entry.upstream = { checkedAt, available: false, error: 'The upstream SKILL.md is no longer valid.' }
+          continue
+        }
+        const hash = instructionsHash(parsed.skill.instructions)
+        if (!entry.instructionsHash) entry.instructionsHash = hash
+        entry.upstream = {
+          checkedAt,
+          available: entry.instructionsHash !== hash,
+          version: parsed.skill.version || null,
+          error: null,
+        }
+      }
+    }
+
+    this.persist()
+    this.refresh()
+    this.notify()
+    log.info('skills', `Update check finished for ${scopeKey} (${groups.size} repositor${groups.size === 1 ? 'y' : 'ies'})`)
+    return this.stateFor(projectPath)
+  }
+
+  /**
+   * Global skills are checked shortly after launch and then at most every six
+   * hours. Project scopes are checked on demand when the Skills view opens for
+   * that workspace, because only the renderer knows which project is active.
+   */
+  startBackgroundChecks(): void {
+    if (this.timer) return
+    const sixHours = 6 * 60 * 60 * 1000
+    const tick = () => {
+      const last = this.loadState().checks?.global ?? 0
+      if (Date.now() - last < sixHours) return
+      void this.checkUpdates(null, true).catch((error) =>
+        log.warn('skills', `Background update check failed: ${String(error)}`),
+      )
+    }
+    const initial = setTimeout(tick, 30_000)
+    initial.unref?.()
+    this.timer = setInterval(tick, 60 * 60 * 1000)
+    this.timer.unref?.()
+  }
+
+  stopBackgroundChecks(): void {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
   }
 
   async update(id: string, projectPath: string | null): Promise<SkillUpdateResult> {
@@ -521,6 +628,7 @@ export class SkillsService {
     entry.instructionsHash = nextHash
     entry.version = outcome.skill.version || null
     entry.source = { ...source, ref: prepared.ref }
+    entry.upstream = { checkedAt: Date.now(), available: false, version: entry.version, error: null }
     this.persist()
     this.bump()
     this.refresh()

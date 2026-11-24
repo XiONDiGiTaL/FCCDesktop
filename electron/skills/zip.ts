@@ -19,7 +19,12 @@ export interface ZipResult {
   error: string | null
 }
 
-export function extractZip(archive: Buffer, destination: string, stripComponents = 0): ZipResult {
+export function extractZip(
+  archive: Buffer,
+  destination: string,
+  stripComponents = 0,
+  maxTotalBytes = MAX_TOTAL_BYTES,
+): ZipResult {
   const written: string[] = []
   const skipped: string[] = []
   let eocd = -1
@@ -64,7 +69,8 @@ export function extractZip(archive: Buffer, destination: string, stripComponents
 
     let content: Buffer
     try {
-      content = method === 0 ? data : method === 8 ? inflateRawSync(data, { maxOutputLength: MAX_TOTAL_BYTES }) : Buffer.alloc(0)
+      content =
+        method === 0 ? data : method === 8 ? inflateRawSync(data, { maxOutputLength: maxTotalBytes }) : Buffer.alloc(0)
     } catch {
       skipped.push(`${relativeEntry} (could not be decompressed)`)
       continue
@@ -77,7 +83,9 @@ export function extractZip(archive: Buffer, destination: string, stripComponents
       // Trust the decompressed bytes; the header size is only a hint.
     }
     total += content.length
-    if (total > MAX_TOTAL_BYTES) return { written, skipped, error: 'Archive expands past 48 MB.' }
+    if (total > maxTotalBytes) {
+      return { written, skipped, error: `Archive expands past ${Math.round(maxTotalBytes / 1024 / 1024)} MB.` }
+    }
 
     const target = safeJoin(destination, relativeEntry)
     if (!target) {

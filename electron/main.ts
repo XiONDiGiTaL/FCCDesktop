@@ -7,6 +7,7 @@ import { loadConversations, recoverTempFiles } from './core/conversations'
 import { log } from './core/logger'
 import { ConnectionManager } from './fcc/connection'
 import { AgentManager } from './fcc/agent'
+import { UsageMonitor } from './usage/service'
 import { registerIpc } from './ipc'
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL ?? ''
@@ -18,6 +19,7 @@ app.setName('FCC Desktop')
 app.setAppUserModelId(APP_ID)
 
 const connection = new ConnectionManager()
+const usage = new UsageMonitor(connection)
 
 function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -25,7 +27,15 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-const agent = new AgentManager(connection, (event) => broadcast('agent:event', event))
+const agent = new AgentManager(connection, (event) => {
+  // The monitor only observes the stream; it never delays or alters a turn.
+  try {
+    usage.observe(event)
+  } catch (error) {
+    log.warn('usage', `Usage observation failed: ${String(error)}`)
+  }
+  broadcast('agent:event', event)
+})
 
 function installContentSecurityPolicy(): void {
   const devOrigins = 'http://localhost:5273 http://127.0.0.1:5273'
@@ -160,9 +170,12 @@ function bootstrap(): void {
     registerIpc({
       connection,
       agent,
+      usage,
       getWindow: () => mainWindow,
       broadcastConversations: () => broadcast('conversations:changed', null),
     })
+
+    usage.start()
 
     connection.startPolling()
     const status = await connection.probe()
@@ -198,6 +211,7 @@ function bootstrap(): void {
     if (cleanedUp) return
     cleanedUp = true
     agent.disposeAll()
+    usage.stop()
     connection.dispose()
   })
 

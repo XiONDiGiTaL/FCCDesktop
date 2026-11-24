@@ -42,12 +42,17 @@ export function safeJoin(root: string, entry: string): string | null {
   return target
 }
 
-export function extractTarGz(archive: Buffer, destination: string, stripComponents = 1): ExtractResult {
+export function extractTarGz(
+  archive: Buffer,
+  destination: string,
+  stripComponents = 1,
+  maxTotalBytes = MAX_TOTAL_BYTES,
+): ExtractResult {
   const written: string[] = []
   const skipped: string[] = []
   let tar: Buffer
   try {
-    tar = gunzipSync(archive, { maxOutputLength: MAX_TOTAL_BYTES * 2 })
+    tar = gunzipSync(archive, { maxOutputLength: maxTotalBytes * 2 })
   } catch (error) {
     return { written, skipped, error: `Archive could not be decompressed: ${String(error)}` }
   }
@@ -104,8 +109,8 @@ export function extractTarGz(archive: Buffer, destination: string, stripComponen
       continue
     }
     total += size
-    if (total > MAX_TOTAL_BYTES) {
-      return { written, skipped, error: `Archive expands past ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)} MB.` }
+    if (total > maxTotalBytes) {
+      return { written, skipped, error: `Archive expands past ${Math.round(maxTotalBytes / 1024 / 1024)} MB.` }
     }
     mkdirSync(dirname(target), { recursive: true })
     const chunk = tar.subarray(dataStart, dataStart + size)
