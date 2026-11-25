@@ -727,6 +727,42 @@ export default function SettingsPanel({
               <section className="card">
                 <div className="card-head">
                   <div>
+                    <h3>Free-first routing</h3>
+                    <p>
+                      Automatic choices only consider providers in the free registry. Paid models stay available in the
+                      picker, but are never selected for you.
+                    </p>
+                  </div>
+                </div>
+                <Toggle
+                  checked={settings.agent.freeFirst}
+                  onChange={(value) => void onPatch({ agent: { freeFirst: value } })}
+                  label="Prefer free hosted models"
+                  description="New conversations start on the best free model that fits the task instead of a paid default."
+                />
+                <Toggle
+                  checked={settings.agent.autoFallback}
+                  onChange={(value) => void onPatch({ agent: { autoFallback: value } })}
+                  label="Fall back to another free provider"
+                  description="If a free provider rate-limits or fails before producing output, resume the same session on another free provider."
+                />
+                <Toggle
+                  checked={settings.agent.allowBillableAccounts}
+                  onChange={(value) => void onPatch({ agent: { allowBillableAccounts: value } })}
+                  label="Allow free tiers that can bill"
+                  description="Gemini, SambaNova and Cloudflare can charge above a free allowance or when billing is linked. Leave this off to keep automatic routing strictly non-billable."
+                />
+                <Toggle
+                  checked={settings.agent.allowLocalFallback}
+                  onChange={(value) => void onPatch({ agent: { allowLocalFallback: value } })}
+                  label="Allow local models as a fallback"
+                  description="Use an installed llama.cpp, Ollama or LM Studio model when no hosted free provider is eligible. Local models are never the default."
+                />
+              </section>
+
+              <section className="card">
+                <div className="card-head">
+                  <div>
                     <h3>Current session</h3>
                     <p>Runtime state for the open conversation.</p>
                   </div>

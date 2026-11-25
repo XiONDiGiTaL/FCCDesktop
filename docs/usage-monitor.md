@@ -166,6 +166,20 @@ is present, the copy says so and states how long the report is treated as curren
 
 ---
 
+## Free-first routing state
+
+The dashboard also renders the free-router snapshot. This is not provider quota data:
+
+- `providers`: every registered free provider with its FCC key status, free model count and current state.
+- `cooldowns`: provider id to epoch milliseconds, learned from observed 429 or reset times.
+- `history`: recent free-to-free fallbacks with the provider ids, model ids and failure reason.
+- `lastError`: the last explanation that no free provider was eligible.
+
+Cooldowns and fallback history are stored separately in `routing.json`, not in the usage events. Clearing local usage
+history does not delete live cooldowns. No routing state contains credentials or provider quota estimates.
+
+---
+
 ## Implementation
 
 | File | Role |

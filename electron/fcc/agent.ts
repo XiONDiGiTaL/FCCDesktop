@@ -13,14 +13,19 @@ import type {
 import { getSettings } from '../core/settings'
 import { getProxyToken } from '../core/secrets'
 import { log, redact } from '../core/logger'
+import { analyzeProviderFailure, type ProviderFailureAnalysis } from '../../src/shared/usage'
 import { resolveTool } from './discovery'
 import { skillsService } from '../skills/service'
 import type { ConnectionManager } from './connection'
+import type { FreeRouter } from './free-router'
+import type { ResearchService } from '../research/service'
 
 const MAX_TOOL_OUTPUT = 24000
 const MAX_DIRS = 12
 /** Provider timeouts are retried in place once per turn, never more. */
 const MAX_PROVIDER_RETRIES = 1
+/** Provider switches allowed in one turn before giving the turn back to the user. */
+const MAX_FREE_FALLBACKS = 2
 /**
  * The CLI asks for 128k output tokens by default, which the gateway clamps to
  * ~82k. On a large slow model that is a long turn per call, so cap it: shorter
@@ -40,6 +45,9 @@ const RETRY_PROMPT = 'Continue.'
 const PROVIDER_FAILURE_PATTERNS = [
   /provider api request failed/i,
   /provider exception/i,
+  /\b429\b/,
+  /rate[ _-]?limit|too many requests|throttl/i,
+  /quota[^.\n]{0,32}(?:exceeded|exhausted|reached)|insufficient[ _-]?quota|out of credits/i,
   /request timed out/i,
   /\breadtimeout\b|\btimeouterror\b/i,
   /deadline exceeded/i,
@@ -86,6 +94,8 @@ interface Session {
   turnText: string
   /** Skills revision this process was started with; a change restarts it. */
   skillRevision: number
+  /** Free-provider switches already spent on this turn. */
+  fallbackCount: number
 }
 
 function isDirectory(path: string): boolean {
@@ -145,6 +155,8 @@ export class AgentManager {
   constructor(
     private readonly connection: ConnectionManager,
     private readonly emit: (event: AgentEvent) => void,
+    private readonly router: FreeRouter,
+    private readonly research: ResearchService,
   ) {}
 
   runtime(conversationId: string): AgentRuntimeInfo | null {
@@ -206,7 +218,16 @@ export class AgentManager {
       if (dirs.length >= MAX_DIRS) break
     }
 
-    const model = input.model.trim()
+    let model = input.model.trim()
+    if (!model && getSettings().agent.freeFirst) {
+      const routed = this.router.initialModel('', input.text, attachments.some((item) => item.kind === 'image'))
+      if (!routed) {
+        throw new Error(
+          'No free model is eligible automatically. Add a free provider key in FCC Admin, enable billable free tiers in Settings, or pick a model explicitly in the picker.',
+        )
+      }
+      model = routed.id
+    }
 
     // Skills are resolved before the process is considered: enabling or
     // disabling one changes what the CLI's own registry can see, so the skill
@@ -284,6 +305,7 @@ export class AgentManager {
       workingDirectory: cwd,
       addedDirs: dirs,
       prompt,
+      model,
     }
   }
 
@@ -363,14 +385,17 @@ export class AgentManager {
     ]
     // Non-interactive surfaces cannot answer permission prompts, so every mode
     // declares its tool allowlist explicitly and lets the rest be denied fast.
+    const researchTools = 'mcp__fcc_research__web_search,mcp__fcc_research__fetch_url,mcp__fcc_research__github_repo'
     const allowedTools: Partial<Record<typeof settings.agent.permissionMode, string>> = {
-      default: 'Read,Glob,Grep,LS,NotebookRead,TodoWrite',
-      acceptEdits: 'Read,Glob,Grep,LS,NotebookRead,TodoWrite,Edit,Write,MultiEdit,NotebookEdit',
-      plan: 'Read,Glob,Grep,LS,NotebookRead',
+      default: `Read,Glob,Grep,LS,NotebookRead,TodoWrite,${researchTools}`,
+      acceptEdits: `Read,Glob,Grep,LS,NotebookRead,TodoWrite,Edit,Write,MultiEdit,NotebookEdit,${researchTools}`,
+      plan: `Read,Glob,Grep,LS,NotebookRead,${researchTools}`,
     }
     const allowlist = allowedTools[settings.agent.permissionMode]
     if (allowlist) cliArgs.push('--allowedTools', allowlist)
     if (args.model) cliArgs.push('--model', args.model)
+    const mcpConfig = this.research.configPath()
+    if (mcpConfig) cliArgs.push('--mcp-config', mcpConfig)
     for (const dir of args.dirs) cliArgs.push('--add-dir', dir)
     if (args.resumeId) cliArgs.push('--resume', args.resumeId)
 
@@ -417,6 +442,7 @@ export class AgentManager {
       turnHadOutput: false,
       turnText: '',
       skillRevision: skillsService.revision(),
+      fallbackCount: 0,
     }
 
     let buffer = ''
@@ -726,6 +752,21 @@ export class AgentManager {
       const isError = Boolean(parsed.is_error) || String(parsed.subtype ?? '') !== 'success'
       const denials = Array.isArray(parsed.permission_denials) ? parsed.permission_denials.length : 0
       const resultText = typeof parsed.result === 'string' ? parsed.result : ''
+      const analysis = isError
+        ? analyzeProviderFailure(resultText || session.turnText, Date.now())
+        : null
+      if (analysis) this.router.noteFailure(session.model, analysis)
+
+      // A rate limit, exhausted quota or rejected key will not recover by
+      // replaying the same provider, so switch to another free one first.
+      if (
+        turnId &&
+        analysis &&
+        (analysis.rateLimited || analysis.quotaExhausted || analysis.authFailed) &&
+        this.tryFreeFallback(session, turnId, resultText, analysis)
+      ) {
+        return
+      }
 
       // A transient provider failure that produced nothing useful is replayed
       // once in the same turn, so the UI never shows a failed turn for it.
@@ -768,9 +809,16 @@ export class AgentManager {
         }
       }
 
+      // Server errors and timeouts get one replay on the same provider, then a
+      // free fallback if that replay also failed.
+      if (turnId && isError && analysis && this.tryFreeFallback(session, turnId, resultText, analysis)) {
+        return
+      }
+
       if (turnId && !session.endedTurns.has(turnId)) {
         session.endedTurns.add(turnId)
         session.busy = false
+        if (!isError && !session.cancelled) this.router.noteSuccess(session.model)
         this.emit({
           type: 'turn-end',
           conversationId: session.conversationId,
@@ -797,6 +845,122 @@ export class AgentManager {
    * produced no real output yet: no tool calls, and no text except the error
    * message itself.
    */
+  /**
+   * Restart the agent on another free model while resuming the same Claude
+   * session, so the task context survives the provider change. Returns false
+   * when no free alternative exists, in which case the caller must not retry on
+   * a paid endpoint.
+   */
+  private tryFreeFallback(
+    session: Session,
+    turnId: string,
+    resultText: string,
+    analysis: ProviderFailureAnalysis,
+  ): boolean {
+    if (session.cancelled || session.fallbackCount >= MAX_FREE_FALLBACKS) return false
+    if (!session.sessionId) {
+      log.warn('agent', 'Free fallback skipped: the session id is not available yet')
+      return false
+    }
+    if (!this.router.isFree(session.model)) return false
+    const next = this.router.fallbackFor(session.model, session.turnText || '', false)
+    if (!next) {
+      if (analysis.rateLimited || analysis.quotaExhausted) {
+        this.router.noteUnavailable('Every eligible free provider is cooling down or unconfigured.')
+        this.emit({
+          type: 'free-unavailable',
+          conversationId: session.conversationId,
+          turnId,
+          message:
+            'No other free provider is ready. Add another free key in FCC Admin or wait for the cooldown. This turn was not sent to a paid endpoint.',
+        })
+      }
+      return false
+    }
+
+    const tool = resolveTool('claude')
+    if (!tool.path) return false
+
+    const from = session.model
+    const resumeId = session.sessionId
+    const cwd = session.cwd
+    const dirs = [...session.dirs]
+    const fallbackCount = session.fallbackCount + 1
+
+    // Detach the old process without ending the turn. Its close handler must
+    // not emit a turn-end for a turn that is now running on the new model.
+    session.turnId = null
+    session.restarting = true
+    session.busy = false
+    this.killTree(session)
+    this.sessions.delete(session.conversationId)
+
+    const nextSession = this.spawnSession({
+      conversationId: session.conversationId,
+      toolPath: tool.path,
+      model: next.id,
+      cwd,
+      dirs,
+      resumeId,
+    })
+    nextSession.turnId = turnId
+    nextSession.busy = true
+    nextSession.cancelled = false
+    nextSession.fallbackCount = fallbackCount
+    nextSession.turnAttempts = 0
+    nextSession.turnHadOutput = false
+    nextSession.turnText = ''
+    this.sessions.set(session.conversationId, nextSession)
+
+    this.router.noteFallback(from, next.id, `${analysis.kind}: ${analysis.detail ?? resultText.slice(0, 180)}`)
+    this.emit({
+      type: 'turn-retry',
+      conversationId: session.conversationId,
+      turnId,
+      reason: 'fallback',
+      detail: resultText.slice(0, 900),
+    })
+    this.emit({
+      type: 'model-fallback',
+      conversationId: session.conversationId,
+      turnId,
+      from,
+      to: next.id,
+      fromProvider: this.router.providerOf(from),
+      toProvider: next.providerId,
+      reason: analysis.summary,
+    })
+    this.emit({
+      type: 'status',
+      conversationId: session.conversationId,
+      turnId,
+      phase: 'thinking',
+      detail: `switched to ${next.providerLabel}`,
+    })
+
+    const retryLine = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: RETRY_PROMPT }] },
+    })
+    try {
+      nextSession.proc.stdin?.write(`${retryLine}\n`)
+      log.warn('agent', `Free fallback on ${session.conversationId}: ${from} -> ${next.id}`)
+      return true
+    } catch (error) {
+      log.error('agent', `Free fallback could not start: ${String(error)}`)
+      this.killTree(nextSession)
+      this.sessions.delete(nextSession.conversationId)
+      this.emit({
+        type: 'error',
+        conversationId: session.conversationId,
+        turnId,
+        message: 'The free fallback provider could not be started. The turn was not sent to a paid endpoint.',
+      })
+      this.finishTurn(nextSession, true)
+      return true
+    }
+  }
+
   private shouldRetryProviderFailure(session: Session, isError: boolean, resultText: string): boolean {
     if (!isError || session.cancelled) return false
     if (session.turnAttempts >= MAX_PROVIDER_RETRIES) return false

@@ -790,7 +790,126 @@
   color: var(--ink);
 }
 
+/* ------------------------------------------------------------ free routing */
+
+.usage-routing .usage-card-copy {
+  max-width: 78ch;
+}
+.routing-providers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+.routing-provider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.018);
+}
+.routing-provider.is-ready,
+.routing-provider.is-local {
+  border-color: rgba(126, 226, 168, 0.18);
+}
+.routing-provider.is-cooldown {
+  border-color: rgba(245, 194, 107, 0.22);
+}
+.routing-provider.is-missing-key {
+  border-color: rgba(255, 122, 122, 0.18);
+}
+.routing-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.routing-provider-head strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.routing-provider p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted-dim);
+}
+.routing-provider-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 9px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+.routing-provider-meta .is-warm {
+  color: var(--warn);
+}
+.routing-provider-models {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  color: var(--muted-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routing-provider-limits {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.routing-provider-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+.routing-history {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.routing-history-head {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-dim);
+  margin-bottom: 2px;
+}
+.routing-history-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1.2fr) minmax(0, 1.6fr);
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.routing-history-time {
+  color: var(--muted-dim);
+}
+.routing-history-route {
+  color: var(--body-copy);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routing-history-reason {
+  color: var(--muted-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 760px) {
+  .routing-history-row {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+  .routing-history-reason {
+    display: none;
+  }
   .usage-recent-row {
     grid-template-columns: 58px minmax(0, 1fr) 60px;
   }

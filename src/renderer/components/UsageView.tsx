@@ -6,6 +6,7 @@ import type {
   UsageWindow,
 } from '../../shared/usage'
 import { EXHAUSTED_HOLD_MS, USAGE_POLL_OPTIONS } from '../../shared/usage'
+import { classifyModel, routingSummary, type FreeProviderState } from '../../shared/free-providers'
 import { Badge, Button, InlineNotice, Select, Spinner, StatusDot } from './ui'
 import { AlertIcon, ArrowUpRightIcon, GaugeIcon, InfoIcon, RefreshIcon, TrashIcon } from './Icons'
 import { clockTime, elapsed, relativeTime } from '../lib/format'
@@ -28,6 +29,14 @@ const STATUS: Record<
   exhausted: { label: 'Quota exhausted', tone: 'red', headline: 'Usage limit reached' },
   unknown: { label: 'Usage unknown', tone: 'neutral', headline: 'Provider usage is not reported' },
   offline: { label: 'FCC offline', tone: 'red', headline: 'FCC is not reachable' },
+}
+
+const FREE_STATE: Record<FreeProviderState, { label: string; tone: 'green' | 'amber' | 'red' | 'neutral' }> = {
+  ready: { label: 'Ready', tone: 'green' },
+  local: { label: 'Local', tone: 'green' },
+  'missing-key': { label: 'No key', tone: 'red' },
+  cooldown: { label: 'Cooling down', tone: 'amber' },
+  'no-models': { label: 'No free models', tone: 'neutral' },
 }
 
 const OUTCOME_LABEL: Record<LocalUsageEvent['outcome'], string> = {
@@ -154,6 +163,8 @@ export default function UsageView({ state, activeModel, onState, onBack, onToast
 
   const local = state?.local ?? null
   const provider = state?.provider ?? null
+  const routing = state?.routing ?? null
+  const freeProviders = routing?.providers.filter((entry) => entry.basis !== 'paid') ?? []
   const status = STATUS[provider?.availability ?? 'unknown']
   const remaining = cooldown ? cooldown - now : null
   const active = remaining !== null && remaining > 0
@@ -164,6 +175,8 @@ export default function UsageView({ state, activeModel, onState, onBack, onToast
   // The conversation's model is what the user is actually about to use; the
   // FCC server default is only a fallback.
   const model = activeModel || provider?.model || 'Server default'
+  const activeFree = classifyModel(model).free
+  const routingView = routing ? { ...routing, activeModel: model, activeFree } : null
   const todayTotal = local?.today.requests ?? 0
   const composition = local
     ? [
@@ -296,6 +309,102 @@ export default function UsageView({ state, activeModel, onState, onBack, onToast
               </div>
             ) : null}
           </section>
+
+          {routing && routingView ? (
+            <section className="usage-card usage-routing">
+              <div className="usage-card-head">
+                <span>Free-first routing</span>
+                <Badge tone={activeFree ? 'green' : 'neutral'}>
+                  {activeFree ? 'Free model active' : 'Manual or paid model'}
+                </Badge>
+              </div>
+              <p className="usage-card-copy">
+                {routingSummary(routingView)} Automatic selection only uses providers in the free registry. Paid
+                endpoints remain available in the picker but are never chosen for you.
+              </p>
+
+              <div className="routing-providers">
+                {freeProviders.map((entry) => {
+                  const status = FREE_STATE[entry.state]
+                  return (
+                    <article key={entry.id} className={`routing-provider is-${entry.state}`}>
+                      <div className="routing-provider-head">
+                        <strong>{entry.label}</strong>
+                        <Badge tone={status.tone}>{status.label}</Badge>
+                      </div>
+                      <p>{entry.freeNote}</p>
+                      <div className="routing-provider-meta">
+                        <span>
+                          {entry.freeModelCount} free model{entry.freeModelCount === 1 ? '' : 's'}
+                        </span>
+                        <span>
+                          {entry.kind === 'local'
+                            ? 'No account'
+                            : entry.requiresOptIn
+                              ? 'Opt-in required'
+                              : 'No charge'}
+                        </span>
+                        {entry.cooldownUntil && entry.state === 'cooldown' ? (
+                          <span className="is-warm">Resets {resetLabel(entry.cooldownUntil)}</span>
+                        ) : null}
+                      </div>
+                      {entry.examples.length > 0 ? (
+                        <div className="routing-provider-models" title={entry.examples.join('\n')}>
+                          {entry.examples.join(' · ')}
+                        </div>
+                      ) : null}
+                      <p className="routing-provider-limits" title={entry.limits}>
+                        {entry.limits}
+                      </p>
+                      <div className="routing-provider-actions">
+                        {entry.setupUrl ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={<ArrowUpRightIcon size={12} />}
+                            onClick={() => void window.fcc.app.openExternal(entry.setupUrl)}
+                          >
+                            {entry.kind === 'local' ? 'Setup' : 'Get free key'}
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void window.fcc.app.openExternal(entry.sourceUrl)}
+                        >
+                          Limits
+                        </Button>
+                      </div>
+                    </article>
+                  )
+                })}
+              </div>
+
+              {routing.lastError ? (
+                <InlineNotice tone="error">{routing.lastError}</InlineNotice>
+              ) : null}
+
+              {routing.history.length > 0 ? (
+                <div className="routing-history">
+                  <div className="routing-history-head">Recent free fallbacks</div>
+                  {routing.history.slice(0, 5).map((entry, index) => (
+                    <div key={`${entry.at}-${index}`} className="routing-history-row">
+                      <span className="routing-history-time">{relativeTime(entry.at)}</span>
+                      <span className="routing-history-route" title={`${entry.from} to ${entry.to}`}>
+                        {entry.fromProvider} to {entry.toProvider}
+                      </span>
+                      <span className="routing-history-reason">{entry.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              <p className="usage-security">
+                The router never reads provider keys and never calls a paid endpoint on its own. Cooldowns come from
+                observed 429 or reset times; no quota is invented.
+              </p>
+            </section>
+          ) : null}
 
           {provider.error ? (
             <InlineNotice tone="error">Monitor: {provider.error}</InlineNotice>

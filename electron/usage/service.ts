@@ -21,6 +21,8 @@ import {
   summarizeLocalUsage,
 } from '../../src/shared/usage'
 import type { ConnectionManager } from '../fcc/connection'
+import type { FreeRouter } from '../fcc/free-router'
+import { classifyModel, type ProviderAdminStatus } from '../../src/shared/free-providers'
 import { requestJson } from '../fcc/http'
 import { getSettings, updateSettings } from '../core/settings'
 import { dataRoot } from '../core/paths'
@@ -42,6 +44,7 @@ interface CachedProvider {
   keyDetail: string | null
   syncedAt: number
   windows: UsageWindow[]
+  providers: ProviderAdminStatus[]
 }
 
 interface PersistedUsage {
@@ -146,6 +149,22 @@ function sanitizeCache(input: unknown): CachedProvider | null {
     keyDetail: text(record.keyDetail, 300),
     syncedAt,
     windows: [],
+    providers: Array.isArray(record.providers)
+      ? (record.providers as unknown[])
+          .map((entry) => {
+            if (!entry || typeof entry !== 'object') return null
+            const item = entry as Record<string, unknown>
+            const providerId = text(item.providerId, 80)
+            const status = text(item.status, 40)
+            if (!providerId || !status) return null
+            return {
+              providerId,
+              displayName: text(item.displayName, 120) ?? providerId,
+              status,
+            } satisfies ProviderAdminStatus
+          })
+          .filter((entry): entry is ProviderAdminStatus => entry !== null)
+      : [],
   }
 }
 
@@ -210,7 +229,10 @@ export class UsageMonitor {
   private unwatchConnection: (() => void) | null = null
   private lastConnectionState: ConnectionStatus['state'] | null = null
 
-  constructor(private readonly connection: ConnectionManager) {}
+  constructor(
+    private readonly connection: ConnectionManager,
+    private readonly router: FreeRouter,
+  ) {}
 
   // ------------------------------------------------------------------ lifecycle
 
@@ -337,10 +359,25 @@ export class UsageMonitor {
       cached: this.stale && this.cache !== null,
       error: this.monitorError,
     }
+    const settings = getSettings()
+    const activeModel = provider.model ?? ''
+    const activeFree = activeModel ? classifyModel(activeModel).free : false
+    const routing = {
+      ...this.router.snapshot(),
+      providers: this.router.providers(this.cache?.providers ?? []),
+      activeModel,
+      activeFree,
+      activeProvider: activeModel ? classifyModel(activeModel).providerId : provider.providerId ?? '',
+      autoFallback: settings.agent.autoFallback,
+      freeFirst: settings.agent.freeFirst,
+      allowBillable: settings.agent.allowBillableAccounts,
+      allowLocal: settings.agent.allowLocalFallback,
+    }
     return {
       provider,
       local: summarizeLocalUsage(this.events, now, RETENTION_DAYS),
-      config: sanitizeUsageConfig(getSettings().usage),
+      config: sanitizeUsageConfig(settings.usage),
+      routing,
       sampledAt: now,
     }
   }
@@ -408,6 +445,18 @@ export class UsageMonitor {
   }
 
   observe(event: AgentEvent): void {
+    if (event.type === 'model-fallback') {
+      // The failed attempt belongs to the old model; the replayed turn belongs
+      // to the new one. Turn-end will record the successful provider.
+      const pending = this.pending.get(event.conversationId)
+      if (pending) this.pending.set(event.conversationId, { ...pending, model: event.to })
+      this.emit()
+      return
+    }
+    if (event.type === 'free-unavailable') {
+      this.emit()
+      return
+    }
     if (event.type === 'turn-retry') {
       const pending = this.pending.get(event.conversationId)
       const analysis = analyzeProviderFailure(event.detail ?? '', Date.now())
@@ -601,8 +650,21 @@ export class UsageMonitor {
     let key = { state: 'unknown' as 'configured' | 'missing' | 'unknown', label: 'Unknown', detail: null as string | null }
     let providerLabel = this.cache?.providerLabel ?? quotaCapability(providerId).providerLabel
 
+    let providerStatuses: ProviderAdminStatus[] = this.cache?.providers ?? []
     if (admin.ok && admin.data && Array.isArray(admin.data.provider_status)) {
       const entries = admin.data.provider_status as AdminProvider[]
+      providerStatuses = entries
+        .map((item) => {
+          const id = text(item.provider_id, 80)
+          const status = text(item.status, 40)
+          if (!id || !status) return null
+          return {
+            providerId: id,
+            displayName: text(item.display_name, 120) ?? id,
+            status,
+          } satisfies ProviderAdminStatus
+        })
+        .filter((item): item is ProviderAdminStatus => item !== null)
       const entry = entries.find((item) => text(item.provider_id, 80) === providerId)
       if (entry) {
         const name = text(entry.display_name, 120)
@@ -642,6 +704,7 @@ export class UsageMonitor {
       keyDetail: key.detail,
       syncedAt: Date.now(),
       windows: [],
+      providers: providerStatuses,
     }
     this.stale = false
     this.monitorError = null

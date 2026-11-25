@@ -111,6 +111,19 @@ export const ChevronRightIcon = (p: IconProps) => (
   </Icon>
 )
 
+export const ChevronLeftIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m14.5 6-6 6 6 6" />
+  </Icon>
+)
+
+export const EyeIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6z" />
+    <circle cx="12" cy="12" r="2.6" />
+  </Icon>
+)
+
 export const CopyIcon = (p: IconProps) => (
   <Icon {...p}>
     <rect x="9" y="9" width="11" height="11" rx="2.4" />

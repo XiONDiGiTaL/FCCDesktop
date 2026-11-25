@@ -390,7 +390,11 @@ test('startup: usage reads provider status when the first probe connects FCC', a
   const baseUrl = `http://127.0.0.1:${(address as AddressInfo).port}`
 
   const connection = fakeConnection(baseUrl)
-  const monitor = new UsageMonitor(connection as unknown as ConnectionManager)
+  const router = {
+    snapshot: () => ({ cooldowns: {}, history: [], lastError: null }),
+    providers: () => [],
+  } as unknown as import('../electron/fcc/free-router').FreeRouter
+  const monitor = new UsageMonitor(connection as unknown as ConnectionManager, router)
   t.after(async () => {
     monitor.stop()
     delete process.env.FCC_USAGE_TEST_ROOT

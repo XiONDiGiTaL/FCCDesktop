@@ -4,6 +4,7 @@ import { URL } from 'node:url'
 import type {
   ConnectionStatus,
   ModelCatalog,
+  ModelInfo,
   ServerInfo,
   ServerStartResult,
 } from '../../src/shared/types'
@@ -134,6 +135,11 @@ export class ConnectionManager {
       ownedByApp: this.owned !== null,
       checkedAt: Date.now(),
     })
+  }
+
+  /** Last catalog read, without triggering another request. */
+  cachedModels(): ModelInfo[] {
+    return this.catalog?.models ?? []
   }
 
   async models(force = false): Promise<ModelCatalog> {

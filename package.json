@@ -27,7 +27,9 @@
     "dist:dir": "npm run build && electron-builder --win --dir",
     "test:skills": "node scripts/test-skills.mjs",
     "test:local": "node scripts/test-local.mjs",
-    "test:usage": "node scripts/test-usage.mjs"
+    "test:usage": "node scripts/test-usage.mjs",
+    "test:routing": "node scripts/test-routing.mjs",
+    "test:research": "node scripts/test-research.mjs"
   },
   "dependencies": {},
   "devDependencies": {

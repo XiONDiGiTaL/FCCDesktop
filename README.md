@@ -23,6 +23,8 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
   - [5. First conversation](#5-first-conversation)
 - [Connecting to FCC](#connecting-to-fcc)
 - [Models](#models)
+- [Free-first providers and routing](#free-first-providers-and-routing)
+- [Online research](#online-research)
 - [Agent permissions](#agent-permissions)
 - [Workspaces, files and attachments](#workspaces-files-and-attachments)
 - [Agent Skills](#agent-skills)
@@ -60,6 +62,13 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - Start / stop controls that only ever manage a server **this app started**. An externally managed server is reported as such and is never terminated.
 - Optional auto-start, which still refuses to spawn a duplicate when anything already answers on the endpoint.
 
+**Free-first routing**
+- A registry of legitimate free tiers: NVIDIA NIM, Groq, OpenRouter `:free` models, Google Gemini, SambaNova, Cloudflare Workers AI, and local llama.cpp, Ollama or LM Studio.
+- New conversations start on the best free model for the task. Paid and unknown providers are never chosen automatically.
+- Free tiers that can become billable (Gemini, SambaNova, Cloudflare) need an explicit opt-in, so a linked billing account cannot be charged silently.
+- Rate limits, exhausted quota and provider failures switch to another eligible free provider, resuming the same Claude session so context survives the change.
+- Cooldowns and fallback history are visible in Usage & limits. If no free provider is ready, the turn stops with an explanation instead of falling through to a paid endpoint.
+
 **Real agent, not a chat wrapper**
 - Spawns `fcc-claude` with `--print --input-format stream-json --output-format stream-json --include-partial-messages --verbose`, one long-lived process per conversation.
 - Multi-turn over stdin: a follow-up message reuses the running agent, and reopening a conversation resumes the stored session with `--resume`.
@@ -95,7 +104,7 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 **Interface**
 - Frameless XiØN window with custom title bar, sidebar, chat canvas, activity rail and modal settings.
 - Design system in one stylesheet: Sora + JetBrains Mono, deep near-black surfaces, blue accent, 18/12 radii, cubic-bezier easing.
-- Live model picker with search and grouping, markdown with syntax highlighting, copy actions, toasts.
+- Live model library with task and company pages, search, free/paid labels, markdown with syntax highlighting, copy actions and toasts.
 - Font scale, comfortable/compact density, reduced motion, collapsible sidebar and activity rail.
 - Offline state disables sending and explains what to do instead of failing silently.
 
@@ -106,7 +115,8 @@ Built as a ground-up rebuild: Electron main process, sandboxed preload bridge, R
 - Windows 10 or 11, x64.
 - A working Free Claude Code install: `fcc-server` and `fcc-claude` on `PATH`, or paths set in Settings → Connection → Executables. Don't have it? [Step 1](#1-install-free-claude-code) installs it in one command.
 - An FCC server reachable at the configured endpoint. The default install listens on `127.0.0.1:8082`.
-- At least one provider key configured in FCC's Admin UI, otherwise the proxy accepts requests but returns provider errors.
+- A free provider configured in FCC's Admin UI, for example NVIDIA NIM, Groq, OpenRouter or Gemini. A paid key also works, but automatic routing will not select it.
+- Alternatively, a local GGUF model served through llama.cpp, Ollama or LM Studio.
 
 Running the packaged app does **not** require Node.js. Building from source does.
 
@@ -252,12 +262,55 @@ Agent processes receive `PORT`, `HOST`, `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH
 
 ## Models
 
-The catalog is read live from `/v1/models` and searchable in the composer picker. The list in this build came from an `nvidia_nim` provider with 44 entries, including `claude-fable-5-2`, `claude-opus-5-5` and namespaced variants.
+The catalog is read live from `/v1/models` and browsable in the composer model library. The current catalog has 144 ids across NVIDIA NIM, Google Gemini, llama.cpp and four direct Claude aliases.
 
+- The picker opens on category tiles instead of one long list. **Browse by task** has Coding & agents, General chat, Reasoning, Vision, Image generation, and Audio & specialty. **Browse by company** opens one brand at a time.
+- Each tile opens a scoped, searchable page. Task pages can overlap when a model fits both, such as a coding model that also reasons; company pages group every model under one primary task so nothing is repeated.
 - A conversation stores the model it was created with; changing the picker mid-conversation updates it for subsequent turns.
-- New conversations default to `claude-sonnet-5-5` when the catalog offers it, otherwise the first non-"no thinking" entry, otherwise the first model.
-- If no model is chosen, the app defers to the server default.
+- New conversations use a free model when free-first routing is on. With free-first off, they default to `claude-sonnet-5-5` when the catalog offers it, otherwise the first non-"no thinking" entry, otherwise the first model.
+- If no model is chosen, the app defers to the server default unless free-first routing is on, in which case it picks a free model.
+- Gateway ids are read as `<alias>/<provider>/<model>`, so Gemini, NVIDIA and local models group under their real providers instead of the gateway alias.
+- The library marks each model **free**, **free tier** (opt-in required), **local** or **paid**. Manual selection of a paid model is explicit authorization to use it.
 - **Refresh** re-reads the catalog from FCC; a failed refresh keeps the previous list and reports the error.
+
+---
+
+## Free-first providers and routing
+
+FCC Desktop stays free to install, configure and use. FCC owns the provider keys and does the proxying; this app decides which model ids may be chosen automatically.
+
+| Provider | Free access | Published ceiling | Auto-selected |
+| --- | --- | --- | --- |
+| NVIDIA NIM | Free developer endpoints | About 40 requests/minute, 10,000/day | Yes |
+| Groq | Permanent Free plan | 30 requests/minute, 1,000/day, 200,000 tokens/day | Yes |
+| OpenRouter | Only ids ending in `:free` | 20 requests/minute, 50/day | Yes |
+| Google Gemini | Free tier on Flash, Flash-Lite, 2.5 Pro and Gemma | Per-project limits in AI Studio | Opt-in |
+| SambaNova | Free tier with no payment method | 20 requests/minute, 20/day, 200,000 tokens/day | Opt-in |
+| Cloudflare Workers AI | 10,000 Neurons/day on Workers Free | 10,000 Neurons/day | Opt-in |
+| llama.cpp, Ollama, LM Studio | Local inference | Hardware-bound | Optional fallback |
+| DeepSeek | Direct API is paid | Billed per token | No |
+
+DeepSeek models are supported for free only through a genuinely free third-party endpoint, such as an OpenRouter `:free` variant. Direct DeepSeek is registered as paid and never selected automatically.
+
+The router ranks free models by task hints (coding, reasoning, images, long context), excludes providers in a cooldown, and prefers tool-capable models. Gemini, SambaNova and Cloudflare require **Settings → Agent → Allow free tiers that can bill**, because the app cannot see whether billing is linked to the account.
+
+On a rate limit, exhausted quota or rejected key, the agent switches to another free provider immediately. Server errors and timeouts get one replay first. A switch restarts the agent with `--resume` and the same session id, then sends a neutral continuation, so task context is preserved. Two switches are allowed per turn; if none is eligible the turn stops and says so.
+
+Cooldowns and fallback history live in `routing.json` under the app data folder and appear in Usage & limits. No quota is estimated, no provider key is read, and no request is made to a paid endpoint by the router.
+
+Full design, provider limits and tests: [`docs/free-first.md`](docs/free-first.md).
+
+## Online research
+
+Research is independent of the model. A loopback MCP server (`electron/research/service.ts`) gives the agent three read-only tools:
+
+- **Web search**: public DuckDuckGo results with title, URL and snippet.
+- **Fetch URL**: readable text, title and final URL for a public documentation page or article.
+- **GitHub repository**: metadata, README, a file or a directory listing for a public repository.
+
+The server binds to `127.0.0.1` on a random port with a per-launch bearer token. It blocks loopback, private, link-local and cloud metadata addresses, including after DNS resolution and on redirects, and only allows HTTP or HTTPS on ports 80 and 443. Every result carries its source URL and retrieval time, and the tool descriptions tell the model to cite the URL and separate retrieved facts from its own conclusions.
+
+Research requests go to DuckDuckGo, GitHub and the pages fetched, not to the inference provider. No provider key is used and no authenticated site is read.
 
 ---
 
@@ -320,6 +373,7 @@ A **Usage & limits** view shows what the active provider reports, what FCC Deskt
 without inventing a quota.
 
 - **Provider status**: provider name, active model, key configuration state from FCC's own Admin status, last sync and connection state. Interactive through the sidebar entry and the in-chat banner.
+- **Free-first routing**: every registered free provider with its basis, published limits, free model count and state (ready, no key, no models, cooling down). It also lists recent free fallbacks, the active model's free status, and the last time no free provider was available.
 - **Rate-limit handling**: a `429` is classified as temporary throttling or exhausted quota, the upstream provider, category and request ID are captured, and a live countdown appears when the error contains a retry/reset time. Without a time, the report is treated as current only while it is recent (90 seconds for throttling, 15 minutes for exhausted quota), then it stays visible as a dated “last reported, no longer current” line instead of a permanent status.
 - **Local activity**: request attempts, successes, failures, `429`s, reported tokens, per-model totals, today, 7 days and a 30-day timeline. Every figure is labelled **Locally tracked**, never as remaining account quota.
 - **Honest limits**: NVIDIA NIM publishes no usage or remaining-quota API and its 429s usually carry no rate-limit headers, so provider quota is shown as **Not exposed**. Provider capability notes explain the same for OpenRouter, Anthropic/OpenAI, Groq and local providers.
@@ -338,6 +392,8 @@ Everything is local. There is no telemetry, no analytics and no remote storage.
 | `%APPDATA%\FCC Desktop\data\secrets.json` | Encrypted proxy token (DPAPI via `safeStorage`). |
 | `%APPDATA%\FCC Desktop\data\conversations\<uuid>.json` | Conversations, messages, tool state, usage. |
 | `%APPDATA%\FCC Desktop\data\usage.json` | Local request counts, last 429 metadata and cached provider status. No credentials. |
+| `%APPDATA%\FCC Desktop\data\routing.json` | Free-provider cooldowns and fallback history. No credentials. |
+| `%APPDATA%\FCC Desktop\data\research-mcp.json` | Loopback URL and per-launch bearer token for the research MCP server. |
 | `%APPDATA%\FCC Desktop\logs\` | Rolling application log. |
 
 Security posture:
@@ -377,6 +433,8 @@ npm start          # run the built app
 npm run test:skills
 npm run test:local
 npm run test:usage
+npm run test:routing
+npm run test:research
 ```
 
 Project layout:
@@ -388,6 +446,8 @@ electron/
   ipc.ts               validated IPC handlers
   core/                paths, atomic writes, logger, settings, secrets, conversations
   fcc/                 http client, tool discovery, model catalog, connection, agent
+  fcc/free-router.ts   free-provider selection, cooldowns and fallback history
+  research/            loopback MCP server for web search, page fetch and GitHub
   usage/               provider usage monitor, 429 classification, local telemetry
 src/
   shared/types.ts      contracts shared by main and renderer
@@ -478,6 +538,8 @@ Against a live FCC server on `127.0.0.1:8082` (`nvidia_nim`, 44 models) and Clau
 - Agent Skills engine: `npm run test:skills`, with 32 passing cases covering parsing, validation, safety findings, tar/zip traversal, store toggling, upstream update flags, scoring, both delivery modes, and the service-level install/toggle/remove/isolation paths.
 - Local models: hardware detection on Windows (Ryzen 7 5700X3D, 32 GB RAM, Radeon RX 7900 XT reported as 20 GB VRAM, Vulkan backend), a live Hugging Face index of 10 real GGUF repositories with real file sizes, a 769 MB download at ~113 MB/s, install of llama.cpp b12670, and a model answering `POST /v1/chat/completions` with "local ready" (~168 tokens/s generation).
 - Local models engine: `npm run test:local`, with 13 passing cases for fit scoring, quant/parameter parsing, Vulkan/ROCm/CPU asset selection, llama-server argument building and model ids.
+- Free-first router: `npm run test:routing`, with 14 passing cases. The live FCC catalog (144 models) classifies as 4 paid Claude aliases, 98 Gemini models, 40 NVIDIA NIM models and 2 llama.cpp models, with a coding prompt resolved to a free one. A mixed catalog of Claude, paid OpenRouter, direct DeepSeek and free models produces only free automatic candidates; opt-in tiers, cooldowns, vision requirements, local fallback and provider states are covered. The live catalog now groups Gemini, NVIDIA NIM and local models under their real providers.
+- Research tools: `npm run test:research`, with 4 passing cases for HTML extraction, DuckDuckGo redirect decoding, SSRF rejection, MCP authentication, initialization and tool listing. Live calls returned an Electron release page, page text and GitHub repository metadata, and an end-to-end `fcc-claude` turn with `--mcp-config` called `web_search` and answered with the source URL.
 - Provider usage monitor: live FCC `/` and `/admin/api/status` reads on `127.0.0.1:8082` (provider `nvidia_nim`, model `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, key configured), confirmation that `/usage`, `/v1/usage`, `/api/usage` and `/rate-limits` return 404, and `npm run test:usage`, with 19 passing cases for NIM 429 text, quota exhaustion vs throttling, Retry-After and reset parsing, rate-limit headers, 5xx/401, redaction, availability states, capability reporting, startup/reconnect sync and local daily/weekly aggregates.
 - Agent Skills update detection against a real repository: a clean install reported no update, a stale install hash was flagged, `Update` replaced the folder and cleared the flag, and the next check stayed clean.
 

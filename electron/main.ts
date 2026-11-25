@@ -7,6 +7,8 @@ import { loadConversations, recoverTempFiles } from './core/conversations'
 import { log } from './core/logger'
 import { ConnectionManager } from './fcc/connection'
 import { AgentManager } from './fcc/agent'
+import { FreeRouter } from './fcc/free-router'
+import { ResearchService } from './research/service'
 import { UsageMonitor } from './usage/service'
 import { registerIpc } from './ipc'
 
@@ -19,7 +21,9 @@ app.setName('FCC Desktop')
 app.setAppUserModelId(APP_ID)
 
 const connection = new ConnectionManager()
-const usage = new UsageMonitor(connection)
+const router = new FreeRouter(connection)
+const research = new ResearchService(join(app.getPath('userData'), 'data'))
+const usage = new UsageMonitor(connection, router)
 
 function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -35,7 +39,7 @@ const agent = new AgentManager(connection, (event) => {
     log.warn('usage', `Usage observation failed: ${String(error)}`)
   }
   broadcast('agent:event', event)
-})
+}, router, research)
 
 function installContentSecurityPolicy(): void {
   const devOrigins = 'http://localhost:5273 http://127.0.0.1:5273'
@@ -175,8 +179,13 @@ function bootstrap(): void {
       broadcastConversations: () => broadcast('conversations:changed', null),
     })
 
-    usage.start()
-
+        usage.start()
+    try {
+      await research.start()
+    } catch (error) {
+      // Research is an enhancement; the agent still runs without the MCP tools.
+      log.warn('research', `Research server did not start: ${String(error)}`)
+    }
     connection.startPolling()
     const status = await connection.probe()
     log.info('main', `FCC endpoint ${status.baseUrl} is ${status.state}`)
@@ -212,6 +221,7 @@ function bootstrap(): void {
     cleanedUp = true
     agent.disposeAll()
     usage.stop()
+    research.stop()
     connection.dispose()
   })
 

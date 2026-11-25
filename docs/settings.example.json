@@ -13,7 +13,11 @@
     "permissionMode": "bypassPermissions",
     "workingDirectory": "",
     "additionalDirs": [],
-    "showThinking": true
+    "showThinking": true,
+    "freeFirst": true,
+    "autoFallback": true,
+    "allowBillableAccounts": false,
+    "allowLocalFallback": false
   },
   "ui": {
     "fontScale": 1,

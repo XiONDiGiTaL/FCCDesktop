@@ -34,6 +34,7 @@ import { Button, Modal } from './components/ui'
 import { friendlyError } from './lib/format'
 import type { InstalledModel } from '../shared/local'
 import { isLocalModelId, localModelId } from '../shared/local'
+import { chooseFreeModel, inferTaskProfile } from '../shared/free-providers'
 
 const api = window.fcc
 
@@ -52,8 +53,23 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function preferredModel(models: ModelInfo[], configured: string): string {
+function preferredModel(
+  models: ModelInfo[],
+  configured: string,
+  prefs: { freeFirst: boolean; allowBillableAccounts: boolean },
+): string {
   if (configured) return configured
+  if (prefs.freeFirst) {
+    const free = chooseFreeModel(models, {
+      task: inferTaskProfile('coding agent'),
+      allowBillable: prefs.allowBillableAccounts,
+      allowLocal: false,
+    })
+    if (free) return free.id
+    // Do not silently substitute a paid default when the free registry is
+    // empty. The agent reports the missing free provider instead.
+    return ''
+  }
   const sonnet = models.find((model) => model.id === 'claude-sonnet-5-5')
   if (sonnet) return sonnet.id
   const plain = models.find((model) => !model.noThinking)
@@ -284,9 +300,13 @@ export default function App() {
     const local: ModelInfo[] = localInstalled.map((model) => ({
       id: localModelId(model.path),
       displayName: model.filename.replace(/\.gguf$/i, ''),
-      provider: 'local',
+      provider: 'llamacpp',
       group: 'Local models',
       noThinking: false,
+      free: true,
+      freeBasis: 'local',
+      requiresOptIn: false,
+      local: true,
     }))
     return [...local, ...models]
   }, [localInstalled, models])
@@ -392,6 +412,23 @@ export default function App() {
       }
       const conversation = cache.current.get(event.conversationId)
       if (!conversation) return
+      if (event.type === 'model-fallback') {
+        conversation.model = event.to
+        const streaming = conversation.messages.find((message) => message.status === 'streaming')
+        if (streaming) streaming.meta = { ...streaming.meta, model: event.to }
+        conversation.updatedAt = Date.now()
+        if (activeIdRef.current === conversation.id) {
+          setActive({ ...conversation })
+          setToast({ kind: 'info', text: `Free fallback: ${event.fromProvider} to ${event.toProvider}` })
+        }
+        setRuntime((current) => (current ? { ...current, model: event.to } : current))
+        persist(conversation, true)
+        return
+      }
+      if (event.type === 'free-unavailable') {
+        if (activeIdRef.current === conversation.id) setToast({ kind: 'error', text: event.message })
+        return
+      }
       const touched = projectEvent(conversation, event)
       if (event.type === 'session') {
         persist(conversation)
@@ -590,7 +627,10 @@ export default function App() {
     async (workspacePath?: string) => {
       try {
         const conversation = await api.conversations.create({
-          model: preferredModel(models, settings?.agent.defaultModel ?? ''),
+          model: preferredModel(models, settings?.agent.defaultModel ?? '', {
+            freeFirst: settings?.agent.freeFirst ?? true,
+            allowBillableAccounts: settings?.agent.allowBillableAccounts ?? false,
+          }),
           workspacePath: workspacePath ?? null,
         })
         cache.current.set(conversation.id, conversation)
@@ -607,7 +647,13 @@ export default function App() {
         setToast({ kind: 'error', text: friendlyError(error) })
       }
     },
-    [models, refreshSummaries, settings?.agent.defaultModel],
+    [
+      models,
+      refreshSummaries,
+      settings?.agent.defaultModel,
+      settings?.agent.freeFirst,
+      settings?.agent.allowBillableAccounts,
+    ],
   )
 
   const deleteConversation = useCallback(
@@ -831,7 +877,12 @@ export default function App() {
    */
   const beginTurn = useCallback(
     async (conversation: Conversation, text: string, turnAttachments: Attachment[], skillNames: string[] = []) => {
-      const model = conversation.model || preferredModel(models, settings?.agent.defaultModel ?? '')
+      const model =
+        conversation.model ||
+        preferredModel(models, settings?.agent.defaultModel ?? '', {
+          freeFirst: settings?.agent.freeFirst ?? true,
+          allowBillableAccounts: settings?.agent.allowBillableAccounts ?? false,
+        })
       const turnId = newId()
       const now = Date.now()
 
@@ -895,6 +946,13 @@ export default function App() {
           conversation.sessionId = result.sessionId
           persist(conversation)
         }
+        if (result.model && result.model !== model) {
+          // The main process resolved an empty model through free-first routing.
+          conversation.model = result.model
+          assistantMessage.meta = { ...assistantMessage.meta, model: result.model }
+          if (activeIdRef.current === conversation.id) setActive({ ...conversation })
+          persist(conversation)
+        }
         void api.agent.runtime(conversation.id).then(setRuntime).catch(() => {})
       } catch (error) {
         const message = friendlyError(error)
@@ -921,7 +979,10 @@ export default function App() {
     if (!conversation) {
       try {
         conversation = await api.conversations.create({
-          model: preferredModel(models, settings.agent.defaultModel),
+          model: preferredModel(models, settings.agent.defaultModel, {
+            freeFirst: settings.agent.freeFirst,
+            allowBillableAccounts: settings.agent.allowBillableAccounts,
+          }),
         })
         cache.current.set(conversation.id, conversation)
         activeIdRef.current = conversation.id

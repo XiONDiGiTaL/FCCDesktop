@@ -1,4 +1,5 @@
 import type { ModelCatalog, ModelInfo } from '../../src/shared/types'
+import { classifyModel, freeProvider, modelProviderId } from '../../src/shared/free-providers'
 import { requestJson } from './http'
 
 interface RawModel {
@@ -13,13 +14,9 @@ interface RawList {
 }
 
 function providerOf(id: string): string {
-  const parts = id.split('/')
-  if (parts.length > 1) {
-    const first = parts[0] ?? ''
-    if (first === 'anthropic' || first.startsWith('claude-')) return parts[1] ?? 'anthropic'
-    return first
-  }
-  return 'claude'
+  // Gateway ids are <alias>/<provider>/<model>; treating the alias as the
+  // provider made every free Gemini or NIM model look like Anthropic.
+  return modelProviderId(id)
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -37,7 +34,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 }
 
 export function providerLabel(provider: string): string {
-  return PROVIDER_LABELS[provider] ?? provider.replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  return freeProvider(provider)?.label ?? PROVIDER_LABELS[provider] ?? provider.replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 export function normalizeModels(input: unknown): ModelInfo[] {
@@ -52,12 +49,17 @@ export function normalizeModels(input: unknown): ModelInfo[] {
     const displayName =
       typeof raw.display_name === 'string' && raw.display_name.trim() ? raw.display_name.trim() : raw.id
     const provider = providerOf(raw.id)
+    const free = classifyModel(raw.id)
     models.push({
       id: raw.id,
       displayName,
       provider,
       group: providerLabel(provider),
       noThinking: raw.id.includes('no-thinking') || /\(no thinking\)/i.test(displayName),
+      free: free.free,
+      freeBasis: free.basis,
+      requiresOptIn: free.requiresOptIn,
+      local: free.local,
     })
   }
   return models.sort((a, b) => a.group.localeCompare(b.group) || a.displayName.localeCompare(b.displayName))

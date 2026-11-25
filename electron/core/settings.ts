@@ -23,6 +23,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     workingDirectory: '',
     additionalDirs: [],
     showThinking: true,
+    freeFirst: true,
+    autoFallback: true,
+    allowBillableAccounts: false,
+    allowLocalFallback: false,
   },
   skills: {
     enabled: true,
@@ -124,6 +128,10 @@ export function sanitizeSettings(input: unknown): AppSettings {
       workingDirectory: asString(agent.workingDirectory, '').trim(),
       additionalDirs,
       showThinking: asBoolean(agent.showThinking, true),
+      freeFirst: asBoolean(agent.freeFirst, true),
+      autoFallback: asBoolean(agent.autoFallback, true),
+      allowBillableAccounts: asBoolean(agent.allowBillableAccounts, false),
+      allowLocalFallback: asBoolean(agent.allowLocalFallback, false),
     },
     local: {
       storageDir: asString((raw.local as Record<string, unknown> | undefined)?.storageDir, '').trim(),

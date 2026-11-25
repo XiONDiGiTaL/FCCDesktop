@@ -64,6 +64,14 @@ export interface AgentConfig {
   workingDirectory: string
   additionalDirs: string[]
   showThinking: boolean
+  /** Choose a free hosted model for new conversations instead of a paid default. */
+  freeFirst: boolean
+  /** Move to another free provider when one fails and no useful output exists. */
+  autoFallback: boolean
+  /** Allow free tiers that can become billable when billing is linked. */
+  allowBillableAccounts: boolean
+  /** Allow local models as the last automatic fallback. */
+  allowLocalFallback: boolean
 }
 
 export interface UiConfig {
@@ -146,6 +154,11 @@ export interface ModelInfo {
   /** Model ids FCC exposes for a direct provider; grouped in the UI. */
   group: string
   noThinking: boolean
+  /** Classified from the provider registry; paid and unknown are never auto-selected. */
+  free: boolean
+  freeBasis: 'no-charge' | 'allowance' | 'local' | 'paid' | 'unknown'
+  requiresOptIn: boolean
+  local: boolean
 }
 
 export interface ModelCatalog {
@@ -273,6 +286,8 @@ export interface SendPromptResult {
   workingDirectory: string
   addedDirs: string[]
   prompt: string
+  /** The model actually used; differs from the request when free-first routing chose one. */
+  model: string
 }
 
 /** Snapshot of one assistant API message, used to replace streaming text with authoritative content. */
@@ -349,6 +364,19 @@ export type AgentEvent =
       /** The provider error text, for usage classification only. */
       detail?: string
     }
+  /** A free-first fallback moved this turn to another free provider. */
+  | {
+      type: 'model-fallback'
+      conversationId: string
+      turnId: string
+      from: string
+      to: string
+      fromProvider: string
+      toProvider: string
+      reason: string
+    }
+  /** No free endpoint was eligible; the turn must not silently use a paid one. */
+  | { type: 'free-unavailable'; conversationId: string; turnId: string; message: string }
   /** Which installed skills guide this turn, and how their instructions were delivered. */
   | {
       type: 'skills-active'

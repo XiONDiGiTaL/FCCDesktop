@@ -159,6 +159,8 @@ export interface UsageState {
   provider: ProviderUsage
   local: LocalUsageSummary
   config: UsageConfig
+  /** Free-first registry, cooldowns and fallback history. */
+  routing: import('./free-providers').RoutingView
   sampledAt: number
 }
 
