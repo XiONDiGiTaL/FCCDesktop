@@ -138,7 +138,7 @@ rejection, MCP authentication, initialization and tool listing.
 
 ## Verified
 
-- The routing tests pass: 14 cases.
+- The routing tests pass: 15 cases.
 - The research tests pass: 4 cases.
 - Live research tools returned an Electron release page, page text and GitHub
   repository metadata.

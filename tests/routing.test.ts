@@ -13,6 +13,8 @@ import {
   type RoutingView,
 } from '../src/shared/free-providers'
 import { MODEL_TASKS, classifyModelTask, modelMatchesTask } from '../src/shared/model-tasks'
+import { groupModelVariants } from '../src/shared/model-variants'
+import type { ModelInfo } from '../src/shared/types'
 
 const now = Date.UTC(2026, 10, 24, 12)
 
@@ -209,6 +211,31 @@ test('the model library separates tasks without mislabeling Gemini chat', () => 
   assert.equal(classifyModelTask({ id: 'anthropic/gemini/models/gemini-2.5-flash-thinking' }), 'reasoning')
   assert.equal(classifyModelTask({ id: 'anthropic/nvidia_nim/mistralai/pixtral-large' }), 'vision')
   assert.equal(MODEL_TASKS.length, 6)
+})
+
+test('the model library collapses no-thinking variants into one row', () => {
+  const model = (id: string, displayName: string, noThinking: boolean): ModelInfo => ({
+    id,
+    displayName,
+    provider: 'gemini',
+    group: 'Google Gemini',
+    noThinking,
+    free: true,
+    freeBasis: 'allowance',
+    requiresOptIn: true,
+    local: false,
+  })
+  const groups = groupModelVariants([
+    model('anthropic/gemini/models/gemini-3-pro', 'gemini/models/gemini-3-pro', false),
+    model('claude-3-freecc-no-thinking/gemini/models/gemini-3-pro', 'gemini/models/gemini-3-pro (no thinking)', true),
+    model('anthropic/gemini/models/gemini-3-pro-image', 'gemini/models/gemini-3-pro-image', false),
+  ])
+  assert.equal(groups.length, 2)
+  const base = groups.find((group) => group.baseName.endsWith('gemini-3-pro'))
+  assert.equal(base?.standard?.id, 'anthropic/gemini/models/gemini-3-pro')
+  assert.equal(base?.noThinking?.id, 'claude-3-freecc-no-thinking/gemini/models/gemini-3-pro')
+  assert.equal(base?.primary.id, base?.standard?.id)
+  assert.equal(base?.models.length, 2)
 })
 
 test('the empty state says when no free provider is ready', () => {

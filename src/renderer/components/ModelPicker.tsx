@@ -8,6 +8,7 @@ import {
   modelTaskMeta,
   type ModelTaskId,
 } from '../../shared/model-tasks'
+import { groupModelVariants, type ModelVariantGroup } from '../../shared/model-variants'
 import { modelLabel, statusLabel } from '../lib/format'
 import { Button, Spinner, StatusDot, TextInput } from './ui'
 import {
@@ -41,7 +42,7 @@ type LibraryView =
 
 interface BrandGroup {
   label: string
-  models: ModelInfo[]
+  groups: ModelVariantGroup[]
   freeCount: number
   local: boolean
 }
@@ -69,18 +70,22 @@ function brandInitials(label: string): string {
     .toUpperCase()
 }
 
-function matchesQuery(model: ModelInfo, query: string): boolean {
+function matchesGroup(group: ModelVariantGroup, query: string): boolean {
   if (!query) return true
-  const task = modelTaskMeta(classifyModelTask(model))
-  return `${model.displayName} ${model.id} ${model.group} ${task.label}`.toLowerCase().includes(query)
+  const task = modelTaskMeta(classifyModelTask(group.primary))
+  const text = `${group.baseName} ${task.label} ${group.models
+    .map((model) => `${model.displayName} ${model.id} ${model.group}`)
+    .join(' ')}`.toLowerCase()
+  return text.includes(query)
 }
 
-function groupByBrand(models: ModelInfo[]): Array<[string, ModelInfo[]]> {
-  const map = new Map<string, ModelInfo[]>()
-  for (const model of models) {
-    const list = map.get(model.group)
-    if (list) list.push(model)
-    else map.set(model.group, [model])
+function groupByBrand(groups: ModelVariantGroup[]): Array<[string, ModelVariantGroup[]]> {
+  const map = new Map<string, ModelVariantGroup[]>()
+  for (const group of groups) {
+    const label = group.primary.group
+    const list = map.get(label)
+    if (list) list.push(group)
+    else map.set(label, [group])
   }
   return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]))
 }
@@ -92,45 +97,47 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
   const [refreshing, setRefreshing] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const taskByModel = useMemo(
-    () => new Map(models.map((model) => [model.id, classifyModelTask(model)])),
-    [models],
+  const catalogGroups = useMemo(() => groupModelVariants(models), [models])
+  const taskByGroup = useMemo(
+    () => new Map(catalogGroups.map((group) => [group.key, classifyModelTask(group.primary)])),
+    [catalogGroups],
   )
-  const taskIdsByModel = useMemo(
-    () => new Map(models.map((model) => [model.id, modelTaskIds(model)])),
-    [models],
+  const taskIdsByGroup = useMemo(
+    () => new Map(catalogGroups.map((group) => [group.key, modelTaskIds(group.primary)])),
+    [catalogGroups],
   )
 
   const taskGroups = useMemo(
     () =>
       MODEL_TASKS.map((task) => ({
         ...task,
-        models: models.filter((model) => taskIdsByModel.get(model.id)?.includes(task.id)),
-      })).filter((task) => task.models.length > 0),
-    [models, taskIdsByModel],
+        groups: catalogGroups.filter((group) => taskIdsByGroup.get(group.key)?.includes(task.id)),
+      })).filter((task) => task.groups.length > 0),
+    [catalogGroups, taskIdsByGroup],
   )
 
   const brands = useMemo<BrandGroup[]>(() => {
-    const map = new Map<string, ModelInfo[]>()
-    for (const model of models) {
-      const list = map.get(model.group)
-      if (list) list.push(model)
-      else map.set(model.group, [model])
+    const map = new Map<string, ModelVariantGroup[]>()
+    for (const group of catalogGroups) {
+      const label = group.primary.group
+      const list = map.get(label)
+      if (list) list.push(group)
+      else map.set(label, [group])
     }
     return Array.from(map.entries())
-      .map(([label, items]) => ({
+      .map(([label, groups]) => ({
         label,
-        models: items,
-        freeCount: items.filter((model) => model.free).length,
-        local: items.some((model) => model.local),
+        groups,
+        freeCount: groups.filter((group) => group.primary.free).length,
+        local: groups.some((group) => group.primary.local),
       }))
       .sort(
         (a, b) =>
           b.freeCount - a.freeCount ||
-          b.models.length - a.models.length ||
+          b.groups.length - a.groups.length ||
           a.label.localeCompare(b.label),
       )
-  }, [models])
+  }, [catalogGroups])
 
   useEffect(() => {
     if (!open) return
@@ -185,11 +192,15 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
 
   const search = query.trim().toLowerCase()
   const detailItems = useMemo(() => {
-    if (view.kind === 'task') return models.filter((model) => modelMatchesTask(model, view.id))
-    if (view.kind === 'brand') return models.filter((model) => model.group === view.label)
-    if (view.kind === 'all') return models
+    if (view.kind === 'task') {
+      return catalogGroups.filter((group) => modelMatchesTask(group.primary, view.id))
+    }
+    if (view.kind === 'brand') {
+      return catalogGroups.filter((group) => group.primary.group === view.label)
+    }
+    if (view.kind === 'all') return catalogGroups
     return []
-  }, [models, view])
+  }, [catalogGroups, view])
 
   const detailTask = view.kind === 'task' ? modelTaskMeta(view.id) : null
   const detailTitle =
@@ -203,19 +214,19 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
       ? detailTask?.description ?? ''
       : view.kind === 'brand'
         ? `Every ${view.label} endpoint in the FCC catalog.`
-        : 'Every model FCC currently exposes, with free and paid endpoints labeled.'
-  const detailFree = detailItems.filter((model) => model.free).length
-  const filtered = detailItems.filter((model) => matchesQuery(model, search))
+        : 'Every model FCC currently exposes, with duplicate no-thinking variants collapsed.'
+  const detailFree = detailItems.filter((group) => group.primary.free).length
+  const filtered = detailItems.filter((group) => matchesGroup(group, search))
 
   const detailGroups =
     view.kind === 'brand'
       ? MODEL_TASKS.map((task) => [
           task.label,
-          filtered.filter((model) => taskByModel.get(model.id) === task.id),
-        ] as [string, ModelInfo[]]).filter(([, items]) => items.length > 0)
+          filtered.filter((group) => taskByGroup.get(group.key) === task.id),
+        ] as [string, ModelVariantGroup[]]).filter(([, items]) => items.length > 0)
       : groupByBrand(filtered)
 
-  const homeMatches = search ? models.filter((model) => matchesQuery(model, search)) : []
+  const homeMatches = search ? catalogGroups.filter((group) => matchesGroup(group, search)) : []
   const homeGroups = groupByBrand(homeMatches)
 
   const select = (modelId: string) => {
@@ -225,34 +236,64 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
     setView({ kind: 'home' })
   }
 
-  const renderRow = (model: ModelInfo) => (
-    <button
-      type="button"
-      key={model.id}
-      className={`model-row ${model.id === value ? 'is-active' : ''}`}
-      onClick={() => select(model.id)}
-    >
-      <span className="model-row-main">
-        <span className="model-row-name">{model.displayName}</span>
-        <span className="model-row-id">{model.id}</span>
-      </span>
-      <span className="model-row-tags">
-        {model.local ? (
-          <span className="model-tag is-local">local</span>
-        ) : model.free ? (
-          <span className={`model-tag is-free ${model.requiresOptIn ? 'is-conditional' : ''}`}>
-            {model.requiresOptIn ? 'free tier' : 'free'}
+  const renderRow = (group: ModelVariantGroup) => {
+    const standard = group.standard
+    const noThinking = group.noThinking
+    const primary = group.primary
+    const selected = value === standard?.id || value === noThinking?.id
+    const activeNoThinking = Boolean(noThinking && value === noThinking.id)
+    return (
+      <div key={group.key} className={`model-row ${selected ? 'is-active' : ''}`}>
+        <button
+          type="button"
+          className="model-row-select"
+          onClick={() => select(primary.id)}
+          title={primary.id}
+        >
+          <span className="model-row-main">
+            <span className="model-row-name">{group.baseName}</span>
+            <span className="model-row-id">{primary.id}</span>
           </span>
-        ) : (
-          <span className="model-tag is-paid">paid</span>
-        )}
-        {model.noThinking ? <span className="model-tag">no thinking</span> : null}
-      </span>
-      {model.id === value ? <CheckIcon size={15} className="model-check" /> : null}
-    </button>
-  )
+        </button>
+        <span className="model-row-side">
+          {primary.local ? (
+            <span className="model-tag is-local">local</span>
+          ) : primary.free ? (
+            <span className={`model-tag is-free ${primary.requiresOptIn ? 'is-conditional' : ''}`}>
+              {primary.requiresOptIn ? 'free tier' : 'free'}
+            </span>
+          ) : (
+            <span className="model-tag is-paid">paid</span>
+          )}
+          {standard && noThinking ? (
+            <span className="model-variants" role="group" aria-label="Thinking variant">
+              <button
+                type="button"
+                className={`model-variant ${activeNoThinking ? '' : 'is-active'}`}
+                onClick={() => select(standard.id)}
+                title="Use the standard model"
+              >
+                standard
+              </button>
+              <button
+                type="button"
+                className={`model-variant ${activeNoThinking ? 'is-active' : ''}`}
+                onClick={() => select(noThinking.id)}
+                title="Use the no-thinking variant"
+              >
+                no thinking
+              </button>
+            </span>
+          ) : noThinking ? (
+            <span className="model-tag">no thinking</span>
+          ) : null}
+          {selected ? <CheckIcon size={15} className="model-check" /> : null}
+        </span>
+      </div>
+    )
+  }
 
-  const renderGroups = (groups: Array<[string, ModelInfo[]]>) =>
+  const renderGroups = (groups: Array<[string, ModelVariantGroup[]]>) =>
     groups.map(([label, items]) => (
       <div key={label} className="model-group">
         <div className="model-group-label">
@@ -286,7 +327,7 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
                 <span className="model-pop-eyebrow">MODEL LIBRARY</span>
                 <div className="model-pop-title">
                   <span>Choose a model</span>
-                  <span className="model-pop-count">{models.length} total</span>
+                  <span className="model-pop-count">{catalogGroups.length} models</span>
                 </div>
               </div>
             ) : (
@@ -307,12 +348,12 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
                   autoFocus
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder={`Search ${models.length} models`}
+                  placeholder={`Search ${catalogGroups.length} models`}
                   spellCheck={false}
                 />
               </div>
 
-              {models.length === 0 ? (
+              {catalogGroups.length === 0 ? (
                 <div className="model-empty">
                   {error ?? 'No models discovered yet. Check the FCC connection in Settings.'}
                 </div>
@@ -347,8 +388,8 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
                         <span className="model-tile-body">
                           <span className="model-tile-name">{task.label}</span>
                           <span className="model-tile-meta">
-                            {task.models.length} models ·{' '}
-                            {task.models.filter((model) => model.free).length} free
+                            {task.groups.length} models ·{' '}
+                            {task.groups.filter((group) => group.primary.free).length} free
                           </span>
                         </span>
                         <ChevronRightIcon size={13} className="model-tile-arrow" />
@@ -374,7 +415,7 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
                         <span className="model-tile-body">
                           <span className="model-tile-name">{brand.label}</span>
                           <span className="model-tile-meta">
-                            {brand.models.length} models ·{' '}
+                            {brand.groups.length} models ·{' '}
                             {brand.local ? 'local' : brand.freeCount ? `${brand.freeCount} free` : 'paid'}
                           </span>
                         </span>
@@ -383,7 +424,14 @@ export default function ModelPicker({ models, value, onChange, onRefresh, error,
                     ))}
                   </div>
 
-                  <button type="button" className="model-all" onClick={() => { setView({ kind: 'all' }); setQuery('') }}>
+                  <button
+                    type="button"
+                    className="model-all"
+                    onClick={() => {
+                      setView({ kind: 'all' })
+                      setQuery('')
+                    }}
+                  >
                     <span className="model-tile-icon">
                       <ChipIcon size={15} />
                     </span>
