@@ -228,8 +228,8 @@ Download from the [releases page](https://github.com/XiONDiGiTaL/FCCDesktop/rele
 
 | Artifact | Use |
 | --- | --- |
-| `FCC-Desktop-Setup-1.1.0.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
-| `FCC-Desktop-Portable-1.1.0.exe` | Single portable executable, no install; run it from anywhere. |
+| `FCC-Desktop-Setup-1.0.8.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
+| `FCC-Desktop-Portable-1.0.8.exe` | Single portable executable, no install; run it from anywhere. |
 
 Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on first launch. Click **More info → Run anyway**. The build is reproducible from source with `npm run dist` (see [Building installers](#building-installers)).
 
@@ -497,8 +497,8 @@ npm run dist:dir   # unpacked build only (fast smoke test)
 `electron-builder.yml` targets `nsis` and `portable` for x64, with the XiØN icon from `build/icon.png`. Output:
 
 ```
-release/FCC-Desktop-Setup-1.1.0.exe
-release/FCC-Desktop-Portable-1.1.0.exe
+release/FCC-Desktop-Setup-1.0.8.exe
+release/FCC-Desktop-Portable-1.0.8.exe
 release/win-unpacked/
 ```
 
