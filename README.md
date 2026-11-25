@@ -228,8 +228,8 @@ Download from the [releases page](https://github.com/XiONDiGiTaL/FCCDesktop/rele
 
 | Artifact | Use |
 | --- | --- |
-| `FCC-Desktop-Setup-1.0.4.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
-| `FCC-Desktop-Portable-1.0.4.exe` | Single portable executable, no install; run it from anywhere. |
+| `FCC-Desktop-Setup-1.1.0.exe` | Per-user installer (NSIS). Choose the install directory, plus desktop and Start Menu shortcuts. |
+| `FCC-Desktop-Portable-1.1.0.exe` | Single portable executable, no install; run it from anywhere. |
 
 Both are unsigned, so Windows SmartScreen shows *Windows protected your PC* on first launch. Click **More info → Run anyway**. The build is reproducible from source with `npm run dist` (see [Building installers](#building-installers)).
 
@@ -497,8 +497,8 @@ npm run dist:dir   # unpacked build only (fast smoke test)
 `electron-builder.yml` targets `nsis` and `portable` for x64, with the XiØN icon from `build/icon.png`. Output:
 
 ```
-release/FCC-Desktop-Setup-1.0.4.exe
-release/FCC-Desktop-Portable-1.0.4.exe
+release/FCC-Desktop-Setup-1.1.0.exe
+release/FCC-Desktop-Portable-1.1.0.exe
 release/win-unpacked/
 ```
 
@@ -525,7 +525,7 @@ Code signing is not configured; the artifacts are unsigned.
 
 ## What was verified
 
-Against a live FCC server on `127.0.0.1:8082` (`nvidia_nim`, 44 models) and Claude Code `2.1.330`:
+Against a live FCC server on `127.0.0.1:8082` (NVIDIA NIM plus Google Gemini and llama.cpp, 144 model ids) and Claude Code `2.1.330`:
 
 - Model discovery, connection probe, latency and provider display.
 - A real agent turn with tool calls (shell + file read) rendered as tool cards, with usage footer.
@@ -540,6 +540,7 @@ Against a live FCC server on `127.0.0.1:8082` (`nvidia_nim`, 44 models) and Clau
 - Local models: hardware detection on Windows (Ryzen 7 5700X3D, 32 GB RAM, Radeon RX 7900 XT reported as 20 GB VRAM, Vulkan backend), a live Hugging Face index of 10 real GGUF repositories with real file sizes, a 769 MB download at ~113 MB/s, install of llama.cpp b12670, and a model answering `POST /v1/chat/completions` with "local ready" (~168 tokens/s generation).
 - Local models engine: `npm run test:local`, with 13 passing cases for fit scoring, quant/parameter parsing, Vulkan/ROCm/CPU asset selection, llama-server argument building and model ids.
 - Free-first router: `npm run test:routing`, with 15 passing cases. The live FCC catalog (144 models) classifies as 4 paid Claude aliases, 98 Gemini models, 40 NVIDIA NIM models and 2 llama.cpp models, with a coding prompt resolved to a free one. A mixed catalog of Claude, paid OpenRouter, direct DeepSeek and free models produces only free automatic candidates; opt-in tiers, cooldowns, vision requirements, local fallback and provider states are covered. The live catalog now groups Gemini, NVIDIA NIM and local models under their real providers.
+- Model library: 144 FCC ids display as 74 logical rows. Task and company pages, scoped search, the Standard / No thinking switch, and selection were exercised in a running Electron window. Switching to the no-thinking alias and back to standard updated the composer model both times. The page fits a 1440x920 viewport with no horizontal overflow.
 - Research tools: `npm run test:research`, with 4 passing cases for HTML extraction, DuckDuckGo redirect decoding, SSRF rejection, MCP authentication, initialization and tool listing. Live calls returned an Electron release page, page text and GitHub repository metadata, and an end-to-end `fcc-claude` turn with `--mcp-config` called `web_search` and answered with the source URL.
 - Provider usage monitor: live FCC `/` and `/admin/api/status` reads on `127.0.0.1:8082` (provider `nvidia_nim`, model `nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b`, key configured), confirmation that `/usage`, `/v1/usage`, `/api/usage` and `/rate-limits` return 404, and `npm run test:usage`, with 19 passing cases for NIM 429 text, quota exhaustion vs throttling, Retry-After and reset parsing, rate-limit headers, 5xx/401, redaction, availability states, capability reporting, startup/reconnect sync and local daily/weekly aggregates.
 - Agent Skills update detection against a real repository: a clean install reported no update, a stale install hash was flagged, `Update` replaced the folder and cleared the flag, and the next check stayed clean.
@@ -547,7 +548,7 @@ Against a live FCC server on `127.0.0.1:8082` (`nvidia_nim`, 44 models) and Clau
 Not exercised in this pass:
 
 - The Skills view itself was not clicked through in a running window (the data layer and CLI integration were verified directly; the UI compiled and was reviewed by inspection).
-- The Usage view and its in-chat banner were not clicked through in a running window, and no live 429 was triggered deliberately (the running FCC server must not be disturbed). Parsing, status transitions and capability reporting are covered by `npm run test:usage`.
+- No live 429 or provider failure was triggered deliberately (the running FCC server must not be disturbed). Fallback selection is covered by `npm run test:routing`; the session-restart path was not failure-injected.
 
 - The Start/Stop server buttons (an externally managed FCC server was live and must not be disturbed). The code path only tracks app-owned processes.
 - Selecting files inside the native Windows picker (the dialog opens with the right title and filters, and the selection pipeline was validated through the IPC layer).
